@@ -1,0 +1,9 @@
+mainmenu "Conference badge"
+
+config BADGE_AUTO_CYCLE_MS
+	int "Advance to the next page automatically every N ms (0 = off)"
+	default 0
+	help
+	  For the simulator, where there are no physical buttons.
+
+source "Kconfig.zephyr"

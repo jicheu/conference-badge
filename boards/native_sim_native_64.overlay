@@ -1,0 +1,38 @@
+/*
+ * Simulator: Zephyr's native_sim with its SDL window standing in for the e-paper panel.
+ * Same 296x128 monochrome layout as the real SSD1680 (see native_sim.conf).
+ * The gpio-keys sit on gpio_emul; nothing presses them, pages advance via
+ * CONFIG_BADGE_AUTO_CYCLE_MS instead.
+ */
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	aliases {
+		sw0 = &key1;
+		sw1 = &key2;
+		sw2 = &key3;
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		key1: key_1 {
+			gpios = <&gpio0 1 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+		key2: key_2 {
+			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
+		key3: key_3 {
+			gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+			zephyr,code = <INPUT_KEY_2>;
+		};
+	};
+};
+
+&sdl_dc {
+	width = <296>;
+	height = <128>;
+};

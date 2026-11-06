@@ -1,0 +1,129 @@
+/*
+ * Conference badge: XIAO nRF52840 Plus on a Seeed XIAO ePaper Display Board EN04,
+ * with a 2.9" monochrome 296x128 panel (SSD1680) on the 24-pin FPC connector.
+ *
+ * Pin sources
+ *   - Buttons, battery sense:  Seeed wiki, "Getting Started with EN04".
+ *   - Display pins:            Seeed_GFX2, src/board/configs/XIAO_ePaper_Board_Configs.h
+ *                              (nrfDisplayPins()). Not documented anywhere else.
+ *
+ *   Signal   XIAO pad  MCU pin  Confidence
+ *   CS       D7        P1.12    from library, unambiguous D-name
+ *   SCK      D8        P1.13    from library, matches Zephyr xiao_spi (spi3)
+ *   MOSI     D10       P1.15    from library, matches Zephyr xiao_spi (spi3)
+ *   BUSY     D3        P0.29    from library, unambiguous D-name
+ *   PWR_EN   D6        P1.11    from library ("enable" pin, active high)
+ *   DC       D16       P0.31    library comment says "D16 (raw GPIO 35)"
+ *   RST      D11       P0.15    library comment says "D11 (raw GPIO 30)"
+ *
+ *   DC and RST are the two to check first if the panel stays blank: confirm
+ *   against the EN04 schematic (Seeed wiki, Resources) and swap here if needed.
+ *
+ * Panel: 2.9" mono is driven by Seeed_GFX2 as SSD1680, 296x128. The values below
+ * follow Zephyr's own SSD1680 shield overlay (waveshare_epaper_gdey0213b74),
+ * with the panel size changed. Border waveform / tssv are carried over, not tuned.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	chosen {
+		zephyr,display = &epd;
+	};
+
+	aliases {
+		sw0 = &key1;
+		sw1 = &key2;
+		sw2 = &key3;
+	};
+
+	/* EN04 user buttons, active low (wiki: KEY1=D1, KEY2=D2, KEY3=D4). */
+	buttons {
+		compatible = "gpio-keys";
+
+		key1: key_1 {
+			label = "KEY1";
+			gpios = <&xiao_d 1 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+
+		key2: key_2 {
+			label = "KEY2";
+			gpios = <&xiao_d 2 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
+
+		key3: key_3 {
+			label = "KEY3";
+			gpios = <&xiao_d 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_2>;
+		};
+	};
+
+	mipi_dbi_epd {
+		compatible = "zephyr,mipi-dbi-spi";
+		spi-dev = <&xiao_spi>;
+		dc-gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+		write-only;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		epd: ssd1680@0 {
+			compatible = "solomon,ssd1680";
+			reg = <0>;
+			mipi-max-frequency = <4000000>;
+			/* Native orientation: 296 gate lines wide, 128 source lines tall. */
+			width = <296>;
+			height = <128>;
+			busy-gpios = <&xiao_d 3 GPIO_ACTIVE_HIGH>;
+
+			tssv = <0x80>;
+
+			/*
+			 * Only a "full" profile: no "partial" node means partial refresh
+			 * stays disabled, so every update is a full, ghost-free refresh.
+			 * That is what a badge wants; speed does not matter.
+			 */
+			full {
+				border-waveform = <0x05>;
+			};
+		};
+	};
+};
+
+&xiao_spi {
+	status = "okay";
+	cs-gpios = <&xiao_d 7 GPIO_ACTIVE_LOW>;
+};
+
+/*
+ * Panel power switch (EN04 "enable" net, D6 = P1.11), held on from early boot,
+ * well before the display driver initializes (hog priority 41 vs display 85).
+ */
+&gpio1 {
+	epd_power: epd-power-hog {
+		gpio-hog;
+		gpios = <11 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "epd-power";
+	};
+};
+
+/*
+ * xiao_ble variant: same nRF52840 pins as the Plus board, but DC/RST (P0.31/P0.15,
+ * back pads on the Plus module) are addressed as raw gpio0 pins. No vbatt node here.
+ *
+ * Pins shared with default XIAO peripherals that the EN04 repurposes:
+ *   uart0 uses P1.11/P1.12 (D6/D7)  -> panel power / CS
+ *   i2c1  uses P0.04/P0.05 (D4/D5)  -> KEY3 / battery-sense enable
+ * The EN04 has its own battery divider (A0 = P0.02, enable A5 = P0.05).
+ */
+&uart0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};

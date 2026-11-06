@@ -1,0 +1,42 @@
+{
+  "pages": [
+    {
+      "type": "card",
+      "label": "Main card (QR from a link)",
+      "name": "Alex Example",
+      "title": "Principal Engineer, Embedded Systems",
+      "company": "Example Corp",
+      "qr": "https://example.com/alex"
+    },
+    {
+      "type": "card",
+      "label": "Speaker card (QR from a picture)",
+      "name": "Alex Example",
+      "title": "Speaker: Zephyr on e-paper",
+      "company": "Example Corp",
+      "qr_image": "examples/contact-qr.png"
+    },
+    {
+      "type": "card",
+      "label": "Slides card (QR from a picture URL)",
+      "name": "Alex Example",
+      "title": "Slides of the talk",
+      "company": "Example Corp",
+      "qr_image": "https://api.qrserver.com/v1/create-qr-code/?size=300x300&format=png&data=https://example.com/alex/slides"
+    },
+    {
+      "type": "card",
+      "label": "Long name and title, no company",
+      "name": "Alexandria Example-Longname",
+      "title": "Director of Field Engineering, Devices and IoT",
+      "qr": "https://example.com/alex"
+    },
+    {
+      "type": "qr",
+      "label": "Big QR",
+      "qr": "https://example.com/alex",
+      "caption": "Scan to connect",
+      "footer": "example.com/alex"
+    }
+  ]
+}
