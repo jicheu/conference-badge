@@ -8,3 +8,4 @@ build/
 # Your personal badge (names, links). Keep badges.example.json as the template.
 badge.json
 badges.json
+preview/
