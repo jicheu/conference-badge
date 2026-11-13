@@ -12,4 +12,16 @@ config BADGE_TEST_PATTERN
 	  Pages: all white, all black, orientation marker, vertical stripes.
 	  Use KEY1/KEY2 to step through them.
 
+config BADGE_PANEL_VTILED
+	bool "Panel driver wants vertical 8-pixel tiles, MONO10 (Zephyr ssd16xx, 2.13\" panel)"
+	help
+	  Off for the 4.26" SSD1677 panel and the simulator (row-by-row, MONO01).
+
+config BADGE_REMOTE
+	bool "Accept pages sent over the console serial port (tools/send_badge.py)"
+	default y
+	select CRC
+	help
+	  Fire and forget: the page is drawn and not stored.
+
 source "Kconfig.zephyr"

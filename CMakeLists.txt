@@ -8,3 +8,4 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(conference_badge)
 
 target_sources(app PRIVATE src/main.c src/ssd1677.c)
+target_sources_ifdef(CONFIG_BADGE_REMOTE app PRIVATE src/remote.c)

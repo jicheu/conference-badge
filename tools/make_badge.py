@@ -20,7 +20,7 @@ Usage:
 Input JSON (see badges.example.json):
 
     {
-      "width": 800, "height": 480,          // optional; panel size, width must be a multiple of 8
+      "width": 800, "height": 480,          // optional; panel size (2.13": 250 x 120)
       "pages": [ ... ]                      // shown in this order; KEY1/KEY2 move through them
     }
 
@@ -44,6 +44,16 @@ Each entry in "pages" has a "type":
       caption  optional  text next to the QR (default "Scan to connect")
       footer   optional  small line at the bottom, e.g. the short URL
       label    optional  as above
+
+  "text": free text, as large as it fits
+      text     required  the text; "\\n" starts a new line, long lines are word-wrapped
+      align    optional  "center" (default), "left" or "right"
+      bold     optional  true (default) or false
+
+  "image": any picture (PNG, JPEG, GIF, BMP), a file path or an http(s) URL, max 5 MB
+      image    required  the picture
+      fit      optional  "contain" (default, whole picture, white bars) or "cover" (fills, crops)
+      dither   optional  "threshold" (default, logos and line art) or "floyd" (photos)
 
 With "qr_image" the picture is cropped to the code, its module grid is read back and the QR
 is redrawn sharp at the panel's scale, so a large or slightly blurry export is fine. It must be
@@ -197,23 +207,23 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 FETCH_TIMEOUT_S = 15
 
 
-def open_image(source):
-    """Open a QR picture from a local path or an http(s) URL."""
+def open_image(source, label="qr_image"):
+    """Open a picture from a local path or an http(s) URL."""
     if str(source).lower().startswith(("http://", "https://")):
         req = urllib.request.Request(str(source), headers={"User-Agent": "make_badge.py"})
         try:
             with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
                 data = resp.read(MAX_IMAGE_BYTES + 1)
         except (urllib.error.URLError, OSError, ValueError) as e:
-            raise SystemExit(f"qr_image {str(source)!r}: download failed ({e})")
+            raise SystemExit(f"{label} {str(source)!r}: download failed ({e})")
         if len(data) > MAX_IMAGE_BYTES:
-            raise SystemExit(f"qr_image {str(source)!r}: picture is larger than {MAX_IMAGE_BYTES // 1024 // 1024} MB")
+            raise SystemExit(f"{label} {str(source)!r}: picture is larger than {MAX_IMAGE_BYTES // 1024 // 1024} MB")
         try:
             im = Image.open(io.BytesIO(data))
             im.load()
         except (OSError, ValueError):
             raise SystemExit(
-                f"qr_image {str(source)!r}: the URL did not return a PNG/JPEG/GIF/BMP picture "
+                f"{label} {str(source)!r}: the URL did not return a PNG/JPEG/GIF/BMP picture "
                 "(SVG and web pages are not supported)"
             )
         return im
@@ -224,7 +234,7 @@ def open_image(source):
         im = Image.open(path)
         im.load()
     except (OSError, ValueError) as e:
-        raise SystemExit(f"qr_image {str(source)!r}: cannot open picture ({e})")
+        raise SystemExit(f"{label} {str(source)!r}: cannot open picture ({e})")
     return im
 
 
@@ -247,7 +257,7 @@ def matrix_from_image(source):
     dark = gray.point(lambda v: 255 if v < 128 else 0)
     box = dark.getbbox()
     if box is None:
-        raise SystemExit(f"qr_image {str(source)!r}: no dark pixels (dark modules on a light background expected)")
+        raise SystemExit(f"{label} {str(source)!r}: no dark pixels (dark modules on a light background expected)")
     dark = dark.crop(box)
     w, h = dark.size
     if abs(w - h) > max(2, 0.03 * max(w, h)):
@@ -299,7 +309,7 @@ def qr_matrix(page):
     return matrix_from_image(page["qr_image"]), repr(str(page["qr_image"]))
 
 
-def draw_qr(draw, page, box_height, x_anchor, align):
+def draw_qr(draw, page, box_height, x_anchor, align, max_height=None, v_area=None):
     """Draw a QR code as crisp integer-scaled modules.
 
     Returns (x, size). x_anchor is the right edge when align == "right" and the
@@ -309,6 +319,8 @@ def draw_qr(draw, page, box_height, x_anchor, align):
     modules = len(matrix)
     total = modules + 2 * QUIET_MODULES
     scale = box_height // total
+    if scale < 3 and max_height:  # small panel: trade text room for a scannable QR
+        scale = max(scale, max_height // total)
     if scale < MIN_QR_SCALE:
         raise SystemExit(
             f"QR payload too long for the panel ({modules}x{modules} modules, scale {scale}px): "
@@ -322,7 +334,8 @@ def draw_qr(draw, page, box_height, x_anchor, align):
         )
     size = total * scale
     x = x_anchor - size if align == "right" else x_anchor
-    y = (draw.im.size[1] - size) // 2
+    top, bottom = v_area if v_area else (0, draw.im.size[1])
+    y = top + (bottom - top - size) // 2
     draw.rectangle([x, y, x + size - 1, y + size - 1], fill=255)  # quiet zone
     ox = x + QUIET_MODULES * scale
     oy = y + QUIET_MODULES * scale
@@ -343,15 +356,63 @@ def new_canvas(width, height):
     return img, ImageDraw.Draw(img)
 
 
+def qr_modules(page):
+    return len(qr_matrix(page)[0]) + 2 * QUIET_MODULES
+
+
 def render_card(page, width, height, font_path):
+    """Name, title and QR code; the company line runs along the bottom, full width.
+
+    The QR code and the name/title stack share the area above the company line. On a small
+    panel, where that would make the QR too small to scan, the company goes back under the title.
+    """
     img, draw = new_canvas(width, height)
-    qr_x, _ = draw_qr(draw, page, min(height - 2 * MARGIN, int(height * 0.70)), width - MARGIN, "right")
+    title_text = page.get("title", "")
+    company_text = page.get("company", "")
+    full_w = width - 2 * MARGIN
+    comp_sizes = [sc(14), sc(13), sc(12), sc(11), sc(10), sc(9), sc(8)]
+
+    # Company: prefer one line (shrinking down to sc(10)), else up to two lines.
+    comp_font, comp_lines = (None, [])
+    if company_text:
+        for size in comp_sizes[:5]:
+            f = load_font(size, True, font_path)
+            if text_width(draw, company_text, f) <= full_w:
+                comp_font, comp_lines = f, [company_text]
+                break
+        else:
+            comp_font, comp_lines = layout(draw, company_text, True, full_w, 2, comp_sizes, font_path)
+
+    cap = int(height * 0.70)
+    old_box = min(height - 2 * MARGIN, cap)
+    comp_h = (block_height(comp_lines, comp_font) + sc(8)) if comp_lines else 0
+    top_h = height - 2 * MARGIN - comp_h
+    modules = qr_modules(page)
+    def qr_scale(box, limit):  # same rule as draw_qr: small panels may use up to `limit`
+        sc_ = box // modules
+        return max(sc_, limit // modules) if sc_ < 3 else sc_
+
+    old_scale = qr_scale(old_box, height - 2 * MARGIN)
+    new_scale = qr_scale(min(top_h, cap), top_h)
+    footer_mode = bool(comp_lines) and new_scale >= min(3, old_scale) and new_scale >= old_scale
+
+    if footer_mode:
+        area = (MARGIN, MARGIN + top_h)
+        qr_x, _ = draw_qr(draw, page, min(top_h, cap), width - MARGIN, "right",
+                          max_height=top_h, v_area=area)
+        avail = top_h
+        stack_comp = (None, [])
+    else:
+        area = (MARGIN, height - MARGIN)
+        qr_x, _ = draw_qr(draw, page, old_box, width - MARGIN, "right",
+                          max_height=height - 2 * MARGIN, v_area=None)
+        avail = height - 2 * MARGIN
+        stack_comp = (None, [])
 
     x0 = MARGIN + sc(2)
     max_w = qr_x - x0 - MARGIN
-    avail = height - 2 * MARGIN
-    title_text = page.get("title", "")
-    company_text = page.get("company", "")
+    if not footer_mode and company_text:  # back under the title: one line, text column width
+        stack_comp = layout(draw, company_text, True, max_w, 1, comp_sizes, font_path)
 
     # Shrink the name until the whole stack fits.
     for name_max in range(sc(30), sc(13), -1):
@@ -361,35 +422,35 @@ def render_card(page, width, height, font_path):
         title_font, title_lines = layout(
             draw, title_text, False, max_w, 3, [sc(13), sc(12), sc(11), sc(10), sc(9), sc(8)], font_path
         ) if title_text else (None, [])
-        comp_font, comp_lines = layout(
-            draw, company_text, True, max_w, 1, [sc(14), sc(13), sc(12), sc(11), sc(10), sc(9), sc(8)], font_path
-        ) if company_text else (None, [])
+        sc_font, sc_lines = stack_comp
         total = block_height(name_lines, name_font)
         if title_lines:
             total += sc(10) + block_height(title_lines, title_font)
-        if comp_lines:
-            total += sc(8) + block_height(comp_lines, comp_font)
+        if sc_lines:
+            total += sc(8) + block_height(sc_lines, sc_font)
         if total <= avail:
             break
     else:
         raise SystemExit(f"text does not fit on the badge: {page['name']!r}")
 
-    y = MARGIN + (avail - total) // 2
+    y = area[0] + (avail - total) // 2
     y = draw_lines(draw, x0, y, name_lines, name_font)
     if title_lines:
         y += sc(4)
         draw.line([x0, y, x0 + min(max_w, sc(60)), y], fill=0, width=sc(2))
         y += sc(6)
         y = draw_lines(draw, x0, y, title_lines, title_font)
-    if comp_lines:
+    if sc_lines:
         y += sc(8)
-        draw_lines(draw, x0, y, comp_lines, comp_font)
+        draw_lines(draw, x0, y, sc_lines, sc_font)
+    if footer_mode:
+        draw_lines(draw, x0, height - MARGIN - block_height(comp_lines, comp_font), comp_lines, comp_font)
     return img
 
 
 def render_qr_page(page, width, height, font_path):
     img, draw = new_canvas(width, height)
-    qr_x, qr_size = draw_qr(draw, page, int(height * 0.80), MARGIN, "left")
+    qr_x, qr_size = draw_qr(draw, page, int(height * 0.80), MARGIN, "left", max_height=height - 2 * MARGIN)
     x0 = qr_x + qr_size + sc(12)
     max_w = width - x0 - MARGIN
     caption = page.get("caption", "Scan to connect")
@@ -404,7 +465,80 @@ def render_qr_page(page, width, height, font_path):
     return img
 
 
-RENDERERS = {"card": render_card, "qr": render_qr_page}
+def render_text_page(page, width, height, font_path):
+    """Free text, as large as it fits. Lines break at "\\n" and are word-wrapped."""
+    img, draw = new_canvas(width, height)
+    avail_w, avail_h = width - 2 * MARGIN, height - 2 * MARGIN
+    text = str(page["text"])
+    bold = page.get("bold", True)
+    align = page.get("align", "center")
+    if align not in ("left", "center", "right"):
+        raise SystemExit(f"text page: align must be left, center or right, not {align!r}")
+    gap = sc(2)
+
+    def wrapped(font):
+        lines = []
+        for para in text.split("\n"):
+            lines += wrap(draw, para, font, avail_w) or [""]
+        return lines
+
+    chosen = None
+    for size in range(int(height * 0.6), sc(7) - 1, -2):
+        font = load_font(size, bold, font_path)
+        lines = wrapped(font)
+        if block_height(lines, font, gap) <= avail_h:
+            chosen = (font, lines)
+            break
+    if chosen is None:  # too much text: keep what fits and end with "..."
+        font = load_font(sc(7), bold, font_path)
+        lines = wrapped(font)
+        fit = max(1, (avail_h + gap) // (line_height(font) + gap))
+        if len(lines) > fit:
+            lines = lines[:fit]
+            lines[-1] = ellipsize(draw, lines[-1] + " ...", font, avail_w)
+        chosen = (font, lines)
+    font, lines = chosen
+
+    y = MARGIN + (avail_h - block_height(lines, font, gap)) // 2
+    for line in lines:
+        w = text_width(draw, line, font)
+        x = MARGIN if align == "left" else (width - MARGIN - w if align == "right" else (width - w) // 2)
+        draw.text((x, y), line, font=font, fill=0)
+        y += line_height(font) + gap
+    return img
+
+
+def render_image_page(page, width, height, font_path):
+    """Any picture, fitted to the panel and reduced to black and white.
+
+    fit:    "contain" (default, whole picture, white bars) or "cover" (fills, crops)
+    dither: "threshold" (default, logos and line art), "floyd" (photos) or "auto"
+            (picture is already pure black and white: threshold)
+    """
+    im = open_image(page["image"], "image")
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        white = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        im = Image.alpha_composite(white, im)
+    gray = im.convert("L")
+    fit = page.get("fit", "contain")
+    if fit not in ("contain", "cover"):
+        raise SystemExit(f"image page: fit must be contain or cover, not {fit!r}")
+    iw, ih = gray.size
+    scale = max(width / iw, height / ih) if fit == "cover" else min(width / iw, height / ih)
+    new = (max(1, round(iw * scale)), max(1, round(ih * scale)))
+    gray = gray.resize(new, Image.Resampling.LANCZOS)
+    canvas = Image.new("L", (width, height), 255)
+    canvas.paste(gray, ((width - new[0]) // 2, (height - new[1]) // 2))
+    mode = page.get("dither", "threshold")
+    if mode not in ("threshold", "floyd", "auto"):
+        raise SystemExit(f"image page: dither must be threshold, floyd or auto, not {mode!r}")
+    if mode == "floyd":
+        canvas = canvas.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
+    return canvas
+
+
+RENDERERS = {"card": render_card, "qr": render_qr_page, "text": render_text_page, "image": render_image_page}
 
 
 # ----------------------------------------------------------------------------
@@ -416,15 +550,15 @@ def to_mono(img, threshold=160):
 
 
 def pack(img):
-    """Pack an 'L' image (0 = black, 255 = white): rows of width/8 bytes, MSB = leftmost, 1 = white."""
+    """Pack an 'L' image (0 = black, 255 = white): rows of ceil(width/8) bytes, MSB = leftmost, 1 = white."""
     width, height = img.size
-    assert width % 8 == 0, "panel width must be a multiple of 8"
+    rb = (width + 7) // 8  # padding bits at the end of a row stay 0
     px = img.load()
-    out = bytearray(width // 8 * height)
+    out = bytearray(rb * height)
     for y in range(height):
         for x in range(width):
             if px[x, y]:
-                out[y * (width // 8) + x // 8] |= 0x80 >> (x % 8)
+                out[y * rb + x // 8] |= 0x80 >> (x % 8)
     return bytes(out)
 
 
@@ -434,7 +568,7 @@ def unpack(data, width, height):
     px = img.load()
     for y in range(height):
         for x in range(width):
-            px[x, y] = 255 if data[y * (width // 8) + x // 8] & (0x80 >> (x % 8)) else 0
+            px[x, y] = 255 if data[y * ((width + 7) // 8) + x // 8] & (0x80 >> (x % 8)) else 0
     return img
 
 
@@ -451,7 +585,7 @@ def write_header(path, pages, width, height):
         "#ifndef BADGE_IMAGES_H_\n#define BADGE_IMAGES_H_\n\n",
         "#include <stddef.h>\n#include <stdint.h>\n\n",
         f"#define BADGE_WIDTH {width}\n#define BADGE_HEIGHT {height}\n",
-        "#define BADGE_BUF_SIZE (BADGE_WIDTH * BADGE_HEIGHT / 8)\n",
+        "#define BADGE_ROW_BYTES ((BADGE_WIDTH + 7) / 8)\n#define BADGE_BUF_SIZE (BADGE_ROW_BYTES * BADGE_HEIGHT)\n",
         f"#define BADGE_PAGE_COUNT {len(pages)}\n\n",
         "struct badge_page {\n\tconst char *name;\n\tconst uint8_t *data;\n};\n\n",
     ]
@@ -476,8 +610,8 @@ def main():
     BASE_DIR = Path(args.config).resolve().parent
     cfg = json.loads(Path(args.config).read_text())
     width, height = cfg.get("width", 800), cfg.get("height", 480)
-    if width % 8:
-        raise SystemExit("width must be a multiple of 8")
+    if height % 8:
+        print("warning: height is not a multiple of 8; the 2.13\" ssd16xx path needs one (use 120)", file=sys.stderr)
     global SCALE, MARGIN
     SCALE = height / 128
     MARGIN = sc(6)
@@ -491,7 +625,7 @@ def main():
         data = pack(img)
         if unpack(data, width, height).tobytes() != img.tobytes():
             raise SystemExit(f"page {i}: pack/unpack round trip failed")
-        label = page.get("label") or page.get("name") or page.get("caption") or f"page {i + 1}"
+        label = page.get("label") or page.get("name") or page.get("caption") or (str(page["text"]).split("\n")[0][:24] if "text" in page else None) or f"page {i + 1}"
         rendered.append((label.replace('"', "'"), data))
         if args.preview:
             out_dir = Path(args.preview)

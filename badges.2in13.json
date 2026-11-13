@@ -1,0 +1,10 @@
+{
+  "width": 250,
+  "height": 120,
+  "pages": [
+    { "type": "card", "name": "Your Name", "title": "Your Title", "company": "Your Company",
+      "qr": "https://example.com" },
+    { "type": "qr", "qr": "https://example.com", "caption": "Scan to connect",
+      "footer": "example.com" }
+  ]
+}

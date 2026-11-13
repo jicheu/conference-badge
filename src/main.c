@@ -18,12 +18,47 @@
 #include <zephyr/logging/log.h>
 
 #include "badge_images.h"
+#if CONFIG_BADGE_REMOTE
+#include "remote.h"
+#endif
 
 LOG_MODULE_REGISTER(badge, LOG_LEVEL_INF);
 
 #define DEBOUNCE_MS 60
+#define ACTION_REMOTE 100 /* a page was received over serial */
 
 static const struct device *const epd = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+
+#if CONFIG_BADGE_PANEL_VTILED
+/*
+ * Panels driven by Zephyr's ssd16xx driver (2.13") want MONO10 (1 = black) in vertical
+ * 8-pixel tiles. The badge bitmaps are row by row with 1 = white, so each frame is
+ * converted just before it is sent.
+ */
+static uint8_t frame_buf[BADGE_WIDTH * BADGE_HEIGHT / 8];
+
+static void convert_frame(const uint8_t *src)
+{
+	const size_t row_bytes = BADGE_ROW_BYTES;
+
+	memset(frame_buf, 0, sizeof(frame_buf));
+
+	for (size_t y = 0; y < BADGE_HEIGHT; y++) {
+		for (size_t x = 0; x < BADGE_WIDTH; x++) {
+			bool white = src[y * row_bytes + x / 8] & (0x80 >> (x % 8));
+
+			if (!white) {
+				frame_buf[(y / 8) * BADGE_WIDTH + x] |= (uint8_t)(0x80 >> (y % 8));
+			}
+		}
+	}
+}
+#endif
+
+#if CONFIG_BADGE_REMOTE
+/* Holds a page received over serial until it has been drawn. */
+static uint8_t remote_buf[BADGE_BUF_SIZE];
+#endif
 
 /* Key actions are queued and handled in main(), since a refresh takes seconds. */
 K_MSGQ_DEFINE(key_events, sizeof(int), 4, sizeof(int));
@@ -129,16 +164,20 @@ static int check_display(void)
 	LOG_INF("display %ux%u, screen_info 0x%x, pixel format 0x%x", caps.x_resolution,
 		caps.y_resolution, caps.screen_info, caps.current_pixel_format);
 
-	/*
-	 * make_badge.py packs pixels row by row, MSB = leftmost pixel, 1 = white (MONO01).
-	 * Refuse to draw if the driver would interpret the layout differently.
-	 */
-	if (caps.x_resolution != BADGE_WIDTH || caps.y_resolution != BADGE_HEIGHT ||
-	    (caps.screen_info & SCREEN_INFO_MONO_VTILED) ||
-	    !(caps.screen_info & SCREEN_INFO_MONO_MSB_FIRST) ||
-	    caps.current_pixel_format != PIXEL_FORMAT_MONO01) {
-		LOG_ERR("display layout does not match badge images (%dx%d, MONO01, rows, MSB)",
-			BADGE_WIDTH, BADGE_HEIGHT);
+#if CONFIG_BADGE_PANEL_VTILED
+	/* ssd16xx: MONO10, vertical tiles, MSB first. */
+	bool layout_ok = (caps.screen_info & SCREEN_INFO_MONO_VTILED) &&
+			 caps.current_pixel_format == PIXEL_FORMAT_MONO10;
+#else
+	/* ssd1677 driver and simulator: MONO01, rows, MSB first. */
+	bool layout_ok = !(caps.screen_info & SCREEN_INFO_MONO_VTILED) &&
+			 caps.current_pixel_format == PIXEL_FORMAT_MONO01;
+#endif
+
+	if (caps.x_resolution != BADGE_WIDTH || caps.y_resolution != BADGE_HEIGHT || !layout_ok ||
+	    !(caps.screen_info & SCREEN_INFO_MONO_MSB_FIRST)) {
+		LOG_ERR("display layout does not match badge images (%dx%d, vtiled=%d, MSB)",
+			BADGE_WIDTH, BADGE_HEIGHT, IS_ENABLED(CONFIG_BADGE_PANEL_VTILED));
 		return -EINVAL;
 	}
 
@@ -150,14 +189,14 @@ static int check_display(void)
 
 static uint8_t pattern_buf[BADGE_BUF_SIZE];
 
-/* Same layout as the badge bitmaps: rows of BADGE_WIDTH/8 bytes, MSB = leftmost pixel, 1 = white. */
+/* Same layout as the badge bitmaps: rows of BADGE_ROW_BYTES bytes, MSB = leftmost pixel, 1 = white. */
 static void pattern_pixel(int x, int y, bool black)
 {
 	if (x < 0 || y < 0 || x >= BADGE_WIDTH || y >= BADGE_HEIGHT) {
 		return;
 	}
 
-	uint8_t *b = &pattern_buf[y * (BADGE_WIDTH / 8) + x / 8];
+	uint8_t *b = &pattern_buf[y * BADGE_ROW_BYTES + x / 8];
 	uint8_t mask = (uint8_t)(0x80 >> (x % 8));
 
 	if (black) {
@@ -203,30 +242,32 @@ static const char *make_pattern(size_t idx)
 #define NUM_PAGES ((size_t)BADGE_PAGE_COUNT)
 #endif
 
-static int show_page(size_t index)
+static int draw_frame(const char *page_name, const uint8_t *page_data)
 {
-#if CONFIG_BADGE_TEST_PATTERN
-	const char *page_name = make_pattern(index);
-	const uint8_t *page_data = pattern_buf;
-#else
-	const char *page_name = badge_pages[index].name;
-	const uint8_t *page_data = badge_pages[index].data;
-#endif
 	const struct display_buffer_descriptor desc = {
+#if CONFIG_BADGE_PANEL_VTILED
+		.buf_size = sizeof(frame_buf),
+#else
 		.buf_size = BADGE_BUF_SIZE,
+#endif
 		.width = BADGE_WIDTH,
 		.height = BADGE_HEIGHT,
 		.pitch = BADGE_WIDTH,
 	};
 	int err;
 
-	LOG_INF("showing page %zu/%zu: %s", index + 1, (size_t)NUM_PAGES, page_name);
+	LOG_INF("showing %s", page_name);
 
 	/*
 	 * Blanking on: nothing to do. display_write() loads the frame into the controller RAM,
 	 * display_blanking_off() runs one full refresh and waits for BUSY to clear.
 	 */
 	(void)display_blanking_on(epd);
+
+#if CONFIG_BADGE_PANEL_VTILED
+	convert_frame(page_data);
+	page_data = frame_buf;
+#endif
 
 	err = display_write(epd, 0, 0, &desc, page_data);
 	if (err) {
@@ -236,6 +277,22 @@ static int show_page(size_t index)
 	(void)display_blanking_off(epd);
 
 	return err;
+}
+
+static int show_page(size_t index)
+{
+#if CONFIG_BADGE_TEST_PATTERN
+	const char *page_name = make_pattern(index);
+	const uint8_t *page_data = pattern_buf;
+#else
+	const char *page_name = badge_pages[index].name;
+	const uint8_t *page_data = badge_pages[index].data;
+#endif
+	char label[64];
+
+	snprintk(label, sizeof(label), "page %zu/%zu: %s", index + 1, (size_t)NUM_PAGES, page_name);
+
+	return draw_frame(label, page_data);
 }
 
 int main(void)
@@ -255,6 +312,17 @@ int main(void)
 
 	(void)show_page(page);
 
+#if CONFIG_BADGE_REMOTE
+	remote_start(&(const struct remote_cfg){
+		.buf = remote_buf,
+		.size = sizeof(remote_buf),
+		.width = BADGE_WIDTH,
+		.height = BADGE_HEIGHT,
+		.events = &key_events,
+		.action = ACTION_REMOTE,
+	});
+#endif
+
 #if CONFIG_BADGE_AUTO_CYCLE_MS > 0
 	k_timer_start(&cycle_timer, K_MSEC(CONFIG_BADGE_AUTO_CYCLE_MS),
 		      K_MSEC(CONFIG_BADGE_AUTO_CYCLE_MS));
@@ -264,6 +332,17 @@ int main(void)
 		int action;
 
 		k_msgq_get(&key_events, &action, K_FOREVER);
+
+#if CONFIG_BADGE_REMOTE
+		if (action == ACTION_REMOTE) {
+			int derr = draw_frame("remote page", remote_buf);
+
+			/* Purge before releasing the buffer, so a new frame's event is not lost. */
+			k_msgq_purge(&key_events);
+			remote_shown(derr);
+			continue;
+		}
+#endif
 
 		if (action != 0) {
 			page = (size_t)(((int)page + (int)NUM_PAGES + action) % (int)NUM_PAGES);

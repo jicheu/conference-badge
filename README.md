@@ -2,10 +2,63 @@
 
 Name, title and QR code on a reusable e-paper badge, running Zephyr.
 
-- **Hardware:** Seeed XIAO ePaper Display Board **EN04** (XIAO nRF52840) + Seeed **4.26" monochrome 800x480** panel (SSD1677, ref MOB260722009).
+- **Hardware:** Seeed XIAO ePaper Display Board **EN04** (XIAO nRF52840) + a Seeed monochrome panel: **4.26" 800x480** (SSD1677, ref MOB260722009, default) or **2.13" 122x250** (SSD1680). See "Choose your panel".
 - **Firmware:** Zephyr. Zephyr 4.4 has **no SSD1677 driver**, so this project ships its own small one (`src/ssd1677.c`, binding in `dts/bindings/seeed,ssd1677.yaml`). Full refresh only (no ghosting), controller put in deep sleep after each refresh.
 - **Pages:** several pre-rendered pages (name card, speaker card, big QR). On the board KEY1 = previous, KEY2 = next, KEY3 = redraw. In the simulator pages advance by themselves every 4 s.
 - **Tested with:** Canonical Zephyr 26.04 LTS (Zephyr 4.4) in Workshop (`zephyr-26-04`), project folder at `/project/conference-badge`.
+
+## Send a page over USB (fire and forget)
+
+Besides the pages built into the firmware, the badge can show any text or picture you send from a computer, with no rebuild and no reflash. The page is drawn and **not stored**: the e-paper keeps it without power, and the next KEY1/KEY2/KEY3 press goes back to the built-in pages.
+
+```sh
+source .venv/bin/activate
+pip install pillow segno pyserial
+python3 tools/send_badge.py --text "Back in 5 minutes"
+python3 tools/send_badge.py --text "Room 2\nTalk starts at 14:00" --align left
+python3 tools/send_badge.py --image logo.png
+python3 tools/send_badge.py --image photo.jpg --dither floyd --fit cover
+python3 tools/send_badge.py --text "Hello" --preview hello.png    # only writes a PNG, needs no badge
+python3 tools/send_badge.py --info                                 # asks the badge its panel size
+```
+
+- The script asks the badge for its panel size (800x480 or 250x120) and draws the page at that size, so it works with either panel. `--preview` draws without a badge (`--size 250x120` for the small panel).
+- Default port is `/dev/ttyACM0` (the same port as the serial console). Use `--port` to change it. Close `picocom` or `screen` first: only one program can use the port.
+- The refresh takes several seconds. The script prints "received" when the badge has the data, then "done" when the panel has refreshed.
+- If you send a second page before the first has finished refreshing, the badge answers "busy": wait and send again.
+- **In the simulator:** `zephyr.exe` prints a line such as `uart connected to pseudotty: /dev/pts/5`; run `send_badge.py --port /dev/pts/5 --text "Hello"`.
+- The protocol is documented in `src/remote.h` (a small framed packet with a CRC32), so another sender (a Python service, a phone, an LTE gateway) only has to write the same bytes to the serial port.
+- Status: **the receiver ran on my computer against a stand-in for the Zephyr APIs, not on Zephyr and not on the board.** The USB serial path on the real XIAO is unverified. If a send times out, check that no other program holds the port and send me the serial log.
+
+## Choose your panel (4.26" or 2.13")
+
+Two panels are supported. **Three things must match, every time you switch:** the JSON size, the generated header, and the build flags. Mixing them gives `display layout does not match badge images` in the serial log and nothing is drawn.
+
+| | 4.26" (default) | 2.13" |
+|---|---|---|
+| Panel | Seeed 4.26" mono, SSD1677 | Seeed 2.13" mono, SSD1680 (GDEY0213B74) |
+| Pixels used | 800x480 | 250x120 (landscape) |
+| Driver | this project's `src/ssd1677.c` | Zephyr's `ssd16xx` |
+| JSON | `badges.json` without `width`/`height`, or `"width": 800, "height": 480` | `"width": 250, "height": 120` (start from `badges.2in13.json`) |
+| Extra build flags | none | `-DEXTRA_DTC_OVERLAY_FILE=boards/panel_2in13.overlay -DEXTRA_CONF_FILE=boards/panel_2in13.conf` |
+| Simulator | yes (800x480) | no |
+
+**Switch to the 4.26":**
+
+```sh
+python3 tools/make_badge.py badges.json -o src/badge_images.h --preview preview
+workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/conference-badge
+```
+
+**Switch to the 2.13":**
+
+```sh
+python3 tools/make_badge.py badges.2in13.json -o src/badge_images.h --preview preview
+workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/conference-badge -- \
+  -DEXTRA_DTC_OVERLAY_FILE=boards/panel_2in13.overlay -DEXTRA_CONF_FILE=boards/panel_2in13.conf
+```
+
+Always use `-p always` (clean build) when you switch, otherwise the old panel configuration stays in the build directory. Then flash `zephyr/build/zephyr/zephyr.uf2` as usual. Keep one JSON file per panel (for example `badges.json` and `badges.2in13.json`) with the same text, so you can regenerate either one.
 
 ## 1. Make your badge pages
 
@@ -39,7 +92,7 @@ This writes two things:
 
 | Field | Page type | Required | Meaning |
 |---|---|---|---|
-| `type` | both | no | `card` (default) or `qr` |
+| `type` | all | no | `card` (default), `qr`, `text` or `image` |
 | `name` | card | yes | your name; wraps to 2 lines, the font shrinks to fit |
 | `title` | card | no | job title / function; wraps to 2 lines |
 | `company` | card | no | one line under the title |
@@ -47,8 +100,13 @@ This writes two things:
 | `qr_image` | both | one of `qr` / `qr_image` | a picture of an existing QR code (PNG, JPEG, GIF, BMP): a file path relative to the JSON file, **or** an `http(s)://` URL |
 | `caption` | qr | no | text next to the QR (default "Scan to connect") |
 | `footer` | qr | no | small line at the bottom, e.g. the short URL |
-| `label` | both | no | name of the page in the generated header and the firmware log |
-| `width`, `height` | top level | no | panel size, default 800x480 (width must be a multiple of 8). Fonts and margins scale with the height. |
+| `text` | text | yes | the text; `\n` starts a new line, long lines wrap, the font is as large as fits |
+| `align`, `bold` | text | no | `center` (default), `left`, `right`; bold on by default |
+| `image` | image | yes | a picture (PNG, JPEG, GIF, BMP): file path relative to the JSON, or `http(s)://` URL |
+| `fit` | image | no | `contain` (default: whole picture, white bars) or `cover` (fills the panel, crops) |
+| `dither` | image | no | `threshold` (default, logos and line art) or `floyd` (photos) |
+| `label` | all | no | name of the page in the generated header and the firmware log |
+| `width`, `height` | top level | no | panel size, default 800x480 (2.13": 250 x 120). Must match the panel you build for, see "Choose your panel". Fonts and margins scale with the height. |
 
 **QR from a picture:** use `"qr_image": "my-qr.png"` or `"qr_image": "https://example.com/my-qr.png"` instead of `"qr"` (one or the other, not both) when you already have the QR code, for example exported from a link shortener or a vCard generator. A URL is downloaded when you run the script (15 s timeout, 5 MB maximum) and must point straight at the picture, not at a web page. The picture is not stored in the firmware, only the redrawn QR. The script crops the picture, reads its module grid and redraws it crisp at the panel's scale, so the file can be any size. It must be a dark code on a light background (rotation is fine, mirrored or inverted is not) and a plain QR (no logo in the middle, no rounded or coloured styling). If it cannot read the picture it stops with a message. Check the preview PNG and scan it.
 
@@ -135,6 +193,14 @@ workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/confe
 Do not use the `/sense` variant. Flash by double-tapping reset (the XIAO appears as a USB drive) and copying `build/zephyr/zephyr.uf2` to it from the host. This avoids Workshop's USB passthrough, which Canonical lists as a known issue in 26.04.
 
 Without Workshop, the same commands work with plain `west build -b <board> conference-badge -p`.
+
+## 3b. Notes on the 2.13" panel
+
+Commands are in "Choose your panel". This panel runs in landscape, 250x120 usable pixels (Zephyr drops 2 of the 122 rows, since it needs a multiple of 8), with Zephyr's own `ssd16xx` driver.
+
+- `boards/panel_2in13.overlay` replaces the 4.26" panel node (driver, size, no mirroring); `boards/panel_2in13.conf` makes the firmware convert each frame to the layout `ssd16xx` wants.
+- Check the FPC connector type and the jumper on the EN04 for this panel (Seeed wiki). If the image is mirrored or upside down, add `rotation = <180>;` or similar to the `&epd` node in `boards/panel_2in13.overlay`.
+- **Untested:** I have not compiled this variant or run it on hardware. The devicetree validates against the Zephyr bindings, and the generated 250x120 previews look right.
 
 ## What is verified and what is not
 

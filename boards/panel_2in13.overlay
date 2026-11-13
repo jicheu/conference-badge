@@ -1,0 +1,23 @@
+/*
+ * Alternative panel: Seeed 2.13" monochrome 122x250 (GDEY0213B74, SSD1680), used with
+ *   west build ... -DEXTRA_DTC_OVERLAY_FILE=boards/panel_2in13.overlay \
+ *                  -DEXTRA_CONF_FILE=boards/panel_2in13.conf
+ * on top of boards/xiao_ble.overlay (same EN04 pins, keys and panel power).
+ *
+ * Zephyr's own ssd16xx driver is used, with the values of Zephyr's GDEY0213B74 shield
+ * (waveshare_epaper_gdey0213b74): landscape 250x122. The driver exposes 120 of the 122
+ * rows, since the vertical 8-pixel tiles need a multiple of 8. Generate the badge with
+ * "width": 250, "height": 120 (see badges.2in13.json).
+ */
+
+&epd {
+	compatible = "solomon,ssd1680";
+	/delete-property/ mirror-x;
+	width = <250>;
+	height = <122>;
+	tssv = <0x80>;
+
+	full {
+		border-waveform = <0x05>;
+	};
+};
