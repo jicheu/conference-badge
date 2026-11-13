@@ -121,12 +121,17 @@ Build with Bluetooth (add `-DEXTRA_CONF_FILE=ble.conf` to the board build; for t
 
 Details and security notes: README section 6. Bluetooth has not been tested on real hardware yet.
 
+## 5. NFC: tap to open (new, untested on hardware)
+
+Add `"nfc_url": "https://example.com/alex"` at the top of your JSON (max about 40 characters after `https://`), run `make_badge.py`, build with `-DEXTRA_CONF_FILE=nfc.conf` (`"-DEXTRA_CONF_FILE=ble.conf;nfc.conf"` with Bluetooth), flash. Tapping a phone on the badge opens the link. Needs an NFC antenna on pads P0.09 / P0.10. Details: README section 7.
+
 ## Quick reference
 
 | I want to... | Do this |
 |---|---|
 | change my name or title | edit `badges.json`, run `make_badge.py`, rebuild, flash |
 | add a photo or logo as a built-in page | add an `image` page, then as above |
+| let people tap the badge to open my link | `nfc_url` in the JSON + `nfc.conf`, section 5 |
 | show a one-off message | `send_badge.py --text "..."` (USB) or `badge_ble.html` (phone) |
 | switch to the other panel | other JSON size, regenerate, other build command, `-p always` |
 | check it without hardware | simulator, section 2 |

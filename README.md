@@ -258,9 +258,28 @@ workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/confe
 
 If the repository is private, Pages needs a paid plan; otherwise use `python3 -m http.server` as above, or copy `docs/index.html` to any https site you control.
 
+**Long writes (iPhone).** The iPhone sends any write above 20 bytes as a GATT "long write", which Zephyr refuses unless `CONFIG_BT_ATT_PREPARE_COUNT` is above 0 (it showed as `Unhandled ATT code 0x16` in the badge log and as "request not supported, CBATTErrorDomain 6" in Bluefy). `ble.conf` now enables it and asks the phone for a bigger packet size at connection; `src/ble.c` ignores the "prepare" pass so data is fed once. Rebuild and reflash after updating.
+
 **Own sender:** write the packets of `src/remote.h` to the RX characteristic (`6e400002-b5a3-f393-e0a9-e50e24dcca9e`) and read the reply lines from the TX characteristic (`6e400003-...`, notifications, in 20-byte pieces).
 
 **Status:** the page was tested in a headless browser against a mock Bluetooth device, and the bytes it produced were accepted by the firmware's receiver code compiled on a computer (CRC and format). **Not tested: Zephyr's Bluetooth build, pairing, the real radio link, speed.** If a Kconfig symbol in `ble.conf` is rejected by your Zephyr, send the error.
+
+## 7. NFC: tap to open
+
+The badge can act as an NFC tag: tap a phone on it and the phone opens a link (your site, LinkedIn, a vCard page). It is a passive tag: it only serves the link, it does not receive pages (use USB or Bluetooth for that).
+
+1. Add the link to the JSON, at the top level:
+   ```json
+   { "nfc_url": "https://example.com/alex", "pages": [ ... ] }
+   ```
+   Limit: about **40 characters after `https://`** (the tag is a plain 64-byte Type 2 tag; `make_badge.py` refuses a longer link and says so). Use a short link or your own redirect.
+2. Run `tools/make_badge.py` as usual: it now also writes `src/badge_nfc.h`.
+3. Build with `-DEXTRA_CONF_FILE=nfc.conf` (with Bluetooth too: `"-DEXTRA_CONF_FILE=ble.conf;nfc.conf"`), flash.
+4. At boot the console prints `NFC tag ready: <url>`. Tap a phone on the NFC antenna: it should offer to open the link.
+
+**Hardware.** The nRF52840 NFC antenna pins are P0.09 and P0.10. The XIAO board's devicetree leaves them in NFC mode (it does not turn them into GPIO), but the XIAO needs an NFC antenna connected to those two pads, and I have **not checked** that your board/EN04 stack exposes them. Without an antenna the firmware runs but a phone will not see the tag, or only at a few millimetres. If the log says `NFC init failed (-1)`, the pins are configured as GPIO in the chip's UICR (-EPERM).
+
+**Status: written and checked on a computer only** (the tag data format and the C file against the driver's header). Not compiled with the Zephyr build, not tested on the radio. Zephyr 4.4 has no tag library, so `src/nfc.c` drives the nrfx NFCT driver directly and answers the Type 2 READ and HALT commands itself; the tag is read only. If the build stops on `NRFX_NFCT_CONFIG_TIMER_INSTANCE_ID` or an unknown timer handler, send me the error (the driver may need one hardware timer for a silicon workaround).
 
 ## What is verified and what is not
 

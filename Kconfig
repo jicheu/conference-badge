@@ -40,4 +40,13 @@ config BADGE_BLE_PASSKEY
 	  With 0 anyone in radio range can overwrite the displayed page (for testing only; also
 	  also remove CONFIG_BT_APP_PASSKEY from ble.conf if you want no pairing at all).
 
+config BADGE_NFC
+	bool "NFC tap to open: serve the JSON \"nfc_url\" as an NFC tag"
+	depends on SOC_SERIES_NRF52
+	select NRFX_NFCT
+	select NRFX_TIMER
+	help
+	  Needs "nfc_url" in the JSON file and the NFC antenna on pads P0.09 / P0.10.
+	  Build with -DEXTRA_CONF_FILE=nfc.conf (README, section 7).
+
 source "Kconfig.zephyr"

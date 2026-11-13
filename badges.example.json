@@ -1,4 +1,5 @@
 {
+  "nfc_url": "https://example.com/alex",
   "pages": [
     {
       "type": "card",

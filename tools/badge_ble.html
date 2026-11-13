@@ -76,6 +76,12 @@
   <canvas id="preview"></canvas>
   <p style="margin:10px 0 0"><button id="send" class="primary" disabled>Send to badge</button></p>
   <progress id="bar" value="0" max="100" hidden></progress>
+  <details><summary>Write options (for debugging)</summary>
+    <div class="row">
+      <div><label for="wmode">Write mode</label><select id="wmode"><option value="auto">auto (try sizes)</option><option value="resp">with response</option><option value="noresp">without response</option></select></div>
+      <div><label for="wsize">Bytes per write</label><input type="text" id="wsize" value="20"></div>
+    </div>
+  </details>
   <div id="status"></div>
   <pre id="log" hidden></pre>
 </fieldset>
@@ -278,6 +284,7 @@ function refreshPreview() {
 // ---------------------------------------------------------------- Bluetooth
 function setStatus(msg, isErr) { const s = $("status"); s.textContent = msg; s.className = isErr ? "err" : ""; }
 function describe(e) {
+  if (typeof e === "number") return "error code " + e + " (reported by the browser, no text)";
   // Never print "undefined": some browser errors carry no message.
   const name = (e && e.name) || typeof e;
   const msg = (e && e.message) || (typeof e === "string" ? e : "") || (e && e.toString && e.toString() !== "[object Object]" ? e.toString() : "");
@@ -312,12 +319,18 @@ function waitFor(what, ms) {
   });
 }
 
+// Each chunk is COPIED (slice, not subarray): a subarray is a view on the whole 48 KB buffer, and some
+// Web Bluetooth implementations (Bluefy) send the entire underlying buffer instead of just the view.
 let noResponse = false;  // set when we fall back to 20-byte chunks: much faster than one acknowledged write each
 async function write(bytes) {
+  if (!chars) throw new Error("badge disconnected");
   const rx = chars.rx;
-  if (noResponse && rx.writeValueWithoutResponse) await rx.writeValueWithoutResponse(bytes);
-  else if (rx.writeValueWithResponse) await rx.writeValueWithResponse(bytes);
-  else await rx.writeValue(bytes);
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error("write timed out (Bluetooth link lost?)")), 10000); });
+  const op = noResponse && rx.writeValueWithoutResponse ? rx.writeValueWithoutResponse(bytes)
+           : rx.writeValueWithResponse ? rx.writeValueWithResponse(bytes) : rx.writeValue(bytes);
+  op.catch(() => {});
+  try { await Promise.race([op, timeout]); } finally { clearTimeout(t); }
 }
 
 // Largest acknowledged write that fits one ATT packet. iPhone negotiates 185 (182 usable),
@@ -327,11 +340,23 @@ const SIZES = [180, 100, 20];
 let sizeIdx = 0, chunkSize = SIZES[0];
 async function writeAll(bytes) {
   const bar = $("bar"); bar.hidden = false; bar.max = bytes.length; bar.value = 0;
+  const forced = $("wmode").value;
+  if (forced !== "auto") {                      // manual mode: fixed size and mode, no fallback
+    noResponse = forced === "noresp";
+    const size = Math.max(1, parseInt($("wsize").value, 10) || 20);
+    log(`manual: ${size} bytes per write, ${noResponse ? "without" : "with"} response`);
+    for (let off = 0; off < bytes.length; off += size) {
+      await write(bytes.slice(off, off + size));
+      bar.value = Math.min(off + size, bytes.length);
+    }
+    bar.hidden = true;
+    return;
+  }
   for (let off = 0; off < bytes.length; ) {
-    const part = bytes.subarray(off, off + chunkSize);
+    const part = bytes.slice(off, off + chunkSize);
     try { await write(part); }
     catch (e) {
-      if (off > 0 && !noResponse) throw e;          // refusals can only be a size problem on the very first write
+      if (!chars || off > 0 && !noResponse) throw e;          // refusals can only be a size problem on the very first write
       if (sizeIdx < SIZES.length - 1) {
         chunkSize = SIZES[++sizeIdx];
         log(`write of ${part.length} bytes refused (${describe(e)}), trying ${chunkSize}`);
@@ -357,6 +382,9 @@ async function connect() {
     });
     device.addEventListener("gattserverdisconnected", () => {
       chars = null; $("conn").textContent = "disconnected"; $("send").disabled = true;
+      log("badge disconnected");
+      const ws = waiters; waiters = [];
+      ws.forEach((w) => w.reject(new Error("badge disconnected (it may have reset, or refused the link)")));
     });
     $("conn").textContent = "connecting (a pairing request with the passkey may appear)...";
     const server = await device.gatt.connect();

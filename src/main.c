@@ -18,6 +18,9 @@
 #include <zephyr/logging/log.h>
 
 #include "badge_images.h"
+#if CONFIG_BADGE_NFC
+#include "nfc.h"
+#endif
 #if CONFIG_BADGE_REMOTE
 #include "remote.h"
 #endif
@@ -321,6 +324,10 @@ int main(void)
 		.events = &key_events,
 		.action = ACTION_REMOTE,
 	});
+#endif
+
+#if CONFIG_BADGE_NFC
+	(void)nfc_start(); /* the badge works without it; the error is logged */
 #endif
 
 #if CONFIG_BADGE_AUTO_CYCLE_MS > 0
