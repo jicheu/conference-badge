@@ -5,15 +5,17 @@ Name, title and QR code on a reusable e-paper badge running Zephyr, plus any tex
 - **Hardware:** Seeed XIAO ePaper Display Board **EN04** (XIAO nRF52840) + a Seeed monochrome panel: **4.26" 800x480** (SSD1677, ref MOB260722009, default) or **2.13" 122x250** (SSD1680). See section 1.
 - **Firmware:** Zephyr. Zephyr 4.4 has **no SSD1677 driver**, so this project ships its own small one (`src/ssd1677.c`, binding in `dts/bindings/seeed,ssd1677.yaml`). Full refresh only (no ghosting), controller put in deep sleep after each refresh.
 - **Built-in pages:** pre-rendered from a JSON file (name card, big QR, free text, picture). On the board KEY1 = previous, KEY2 = next, KEY3 = redraw. In the simulator pages advance by themselves every 4 s.
-- **Remote pages:** `tools/send_badge.py` sends a text or picture over USB, no rebuild, nothing stored (section 5).
+- **Remote pages:** `tools/send_badge.py` sends a text or picture over USB (section 5), or `tools/badge_ble.html` over Bluetooth LE from a phone (section 6): no rebuild, nothing stored.
 - **Tested with:** Canonical Zephyr 26.04 LTS (Zephyr 4.4) in Workshop (`zephyr-26-04`), project folder at `/project/conference-badge`.
 
 | Path | What it is |
 |---|---|
 | `tools/make_badge.py` | JSON to `src/badge_images.h` (built-in pages) and preview PNGs |
 | `tools/send_badge.py` | send one text or picture to a running badge over USB |
+| `tools/badge_ble.html` | same, over Bluetooth LE from a browser (Web Bluetooth); published by `.github/workflows/pages.yml` |
 | `badges.example.json`, `badges.basic.json`, `badges.2in13.json` | example inputs (full, minimal, 2.13" panel) |
-| `src/main.c`, `src/ssd1677.c`, `src/remote.c` | firmware: pages and keys, display driver, USB receiver |
+| `src/main.c`, `src/ssd1677.c`, `src/remote.c`, `src/ble.c` | firmware: pages and keys, display driver, packet receiver, Bluetooth transport |
+| `ble.conf` | Bluetooth build options (`-DEXTRA_CONF_FILE=ble.conf`) |
 | `boards/` | devicetree overlays and config per board / panel / simulator |
 
 ## 1. Choose your panel (4.26" or 2.13")
@@ -217,8 +219,46 @@ python3 tools/send_badge.py --info                                 # asks the ba
 - The refresh takes several seconds. The script prints "received" when the badge has the data, then "done" when the panel has refreshed.
 - If you send a second page before the first has finished refreshing, the badge answers "busy": wait and send again.
 - **In the simulator:** `zephyr.exe` prints a line such as `uart connected to pseudotty: /dev/pts/5`; run `send_badge.py --port /dev/pts/5 --text "Hello"`.
-- The protocol is documented in `src/remote.h` (a small framed packet with a CRC32), so another sender (a Python service, a phone, an LTE gateway) only has to write the same bytes to the serial port. Bluetooth and LTE senders are not implemented.
+- The protocol is documented in `src/remote.h` (a small framed packet with a CRC32), so another sender (a Python service, a phone, an LTE gateway) only has to write the same bytes to the serial port. LTE senders are not implemented; Bluetooth is in section 6.
 - Status: the receiver logic was checked on a computer against a stand-in for the Zephyr APIs (good frame, bad CRC, wrong size, busy, timeout, resync after garbage) and runs in the simulator. Text, image and rotate on the real board's USB port have had little testing. If a send times out, check that no other program holds the port and look at the serial log.
+
+## 6. Send a page over Bluetooth LE (from a phone or computer)
+
+The same packets as on USB, carried by a GATT service that uses the Nordic UART Service UUIDs (defined in `src/ble.c`; Zephyr 4.4's own `bt_nus` has no security option). The page `tools/badge_ble.html` is the sender: pick text or a picture, see the exact preview, tap Send. It runs in the browser with Web Bluetooth: **Chrome or Edge on Android or desktop; not Safari / iPhone.** On Linux desktop Chrome, Web Bluetooth may need enabling in `chrome://flags`.
+
+**Build the firmware with Bluetooth** (opt-in; the simulator has no Bluetooth):
+
+```sh
+# 4.26" panel
+workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/conference-badge -- \
+  -DEXTRA_CONF_FILE=ble.conf
+
+# 2.13" panel (two conf files, separated by a semicolon)
+workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/conference-badge -- \
+  -DEXTRA_DTC_OVERLAY_FILE=boards/panel_2in13.overlay "-DEXTRA_CONF_FILE=boards/panel_2in13.conf;ble.conf"
+```
+
+**Use it**
+
+1. Open the hosted page (see "Hosting the page" below) or `tools/badge_ble.html` in Chrome (a file on your phone, or `python3 -m http.server` in `tools/` on your computer and open `http://localhost:8000/badge_ble.html`).
+2. Tap Connect and choose the device called `Badge`.
+3. The first time, the phone or computer asks for a passkey: **123456** (see below). The page then reads the panel size from the badge.
+4. Choose Text or Picture, check the preview, tap Send. The panel refreshes after a few seconds.
+
+**Security: change the passkey.** The badge requires an authenticated link (`BT_GATT_PERM_WRITE_AUTHEN`) with the fixed passkey `CONFIG_BADGE_BLE_PASSKEY` (default **123456**, public in this repository). Change it before wearing the badge in public: add `-DCONFIG_BADGE_BLE_PASSKEY=654321` to the build, or edit the default in `Kconfig`. A fixed passkey is a deterrent for pranksters, not strong security. Without it (`CONFIG_BADGE_BLE_PASSKEY=0`), anyone in radio range can overwrite the page. Only one sender at a time (USB or BLE).
+
+**Hosting the page (GitHub Pages).** Web Bluetooth only works on https, so on a phone the easiest way is to host the page. The repository contains `.github/workflows/pages.yml`, which publishes `tools/badge_ble.html` as the site's `index.html` (one file, no build, no secrets, nothing is sent to the server: the picture and the Bluetooth link stay in your browser).
+
+1. Push to `main`.
+2. In the GitHub repository: Settings, Pages, Source = **GitHub Actions** (once).
+3. The workflow runs (Actions tab); the address is `https://<your-user>.github.io/<your-repo>/`.
+4. Open it on the phone (Chrome on Android; **Bluefy** on iPhone, untested), and bookmark it.
+
+If the repository is private, Pages needs a paid plan; otherwise use `python3 -m http.server` as above. Anyone who knows the address can open the page, but it can only talk to a badge within Bluetooth range that accepts their passkey.
+
+**Own sender:** write the packets of `src/remote.h` to the RX characteristic (`6e400002-b5a3-f393-e0a9-e50e24dcca9e`) and read the reply lines from the TX characteristic (`6e400003-...`, notifications, in 20-byte pieces).
+
+**Status:** the page was tested in a headless browser against a mock Bluetooth device, and the bytes it produced were accepted by the firmware's receiver code compiled on a computer (CRC and format). **Not tested: Zephyr's Bluetooth build, pairing, the real radio link, speed.** If a Kconfig symbol in `ble.conf` is rejected by your Zephyr, send the error.
 
 ## What is verified and what is not
 
@@ -238,6 +278,7 @@ Not verified:
 - The **2.13" variant** (never compiled or run).
 - `--rotate` and picture pages on the real panel, and how a photo looks after dithering.
 - Idle power and battery life.
+- **Bluetooth** (section 6): pairing, the real link, transfer speed, RAM use with the Bluetooth stack.
 - The example `qr_image` URL in `badges.example.json` (api.qrserver.com): it needs network access and was never fetched.
 
 ## EN04 pin map (see `boards/xiao_ble.overlay`)
@@ -262,7 +303,7 @@ The overlay disables `uart0` and `i2c1` because the EN04 reuses their pins.
 - **Power:** the driver puts the SSD1677 in deep sleep after each refresh, but the panel supply (D6) is held on by a gpio-hog. Measure idle current before promising battery life.
 - **Battery gauge:** not implemented. The EN04 has its own divider (A0 = P0.02, enable on A5 = P0.05; Seeed's Arduino example uses a x7.16 factor).
 - **Panel tuning:** the driver uses the controller's built-in waveform (OTP) and Seeed's init values. No temperature compensation beyond the internal sensor (command 0x18).
-- **Built-in pages** change only by regenerating the header and re-flashing. Pages sent over USB are not stored (lost at the next key press or reset of the content shown; the panel itself keeps what it displays). Bluetooth or LTE senders are not implemented yet.
+- **Built-in pages** change only by regenerating the header and re-flashing. Pages sent over USB are not stored (lost at the next key press or reset of the content shown; the panel itself keeps what it displays). LTE senders are not implemented; Bluetooth is optional (section 6).
 
 ## Debugging the display
 

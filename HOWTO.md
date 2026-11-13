@@ -112,12 +112,21 @@ python3 tools/send_badge.py --image photo.jpg --preview /tmp/test.png      # jus
 - **Permission denied?** Run `newgrp dialout` once in your terminal (after `sudo usermod -aG dialout $USER`), or use `sudo .venv/bin/python tools/send_badge.py ...`.
 - The refresh takes several seconds. Wait for "done" before sending the next page.
 
+## 4. Send from a phone over Bluetooth
+
+Build with Bluetooth (add `-DEXTRA_CONF_FILE=ble.conf` to the board build; for the 2.13" panel use `"-DEXTRA_CONF_FILE=boards/panel_2in13.conf;ble.conf"`), flash, then open the hosted page (`https://<your-user>.github.io/<your-repo>/`, see README "Hosting the page") or `tools/badge_ble.html` in Chrome or Edge (Android or desktop; iPhone: Bluefy app):
+
+1. Connect, choose the device `Badge`, enter the passkey (default **123456**: change it with `-DCONFIG_BADGE_BLE_PASSKEY=654321`).
+2. Type text or pick a picture, check the preview, Send.
+
+Details and security notes: README section 6. Bluetooth has not been tested on real hardware yet.
+
 ## Quick reference
 
 | I want to... | Do this |
 |---|---|
 | change my name or title | edit `badges.json`, run `make_badge.py`, rebuild, flash |
 | add a photo or logo as a built-in page | add an `image` page, then as above |
-| show a one-off message | `send_badge.py --text "..."` |
+| show a one-off message | `send_badge.py --text "..."` (USB) or `badge_ble.html` (phone) |
 | switch to the other panel | other JSON size, regenerate, other build command, `-p always` |
 | check it without hardware | simulator, section 2 |

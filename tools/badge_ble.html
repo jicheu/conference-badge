@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Badge over Bluetooth</title>
+<style>
+  :root { --bg:#fff; --fg:#111; --muted:#666; --line:#d0d0d0; --accent:#0a5; --err:#b00020; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181a; --fg:#eee; --muted:#9aa; --line:#33383c; --accent:#3c8; --err:#ff6b6b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui, sans-serif; max-width:760px; margin-inline:auto; }
+  h1 { font-size:1.3rem; margin:0 0 4px; }
+  p.hint { color:var(--muted); margin:0 0 16px; font-size:.9rem; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 14px; padding:12px; }
+  legend { padding:0 6px; color:var(--muted); font-size:.85rem; }
+  label { display:block; margin:8px 0 2px; font-size:.9rem; }
+  textarea, input[type=text], select, input[type=file] { width:100%; padding:8px; font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:6px; }
+  textarea { min-height:90px; resize:vertical; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > div { flex:1 1 140px; }
+  button { font:inherit; padding:10px 16px; border-radius:8px; border:1px solid var(--line); background:transparent; color:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.45; cursor:default; }
+  .tabs { display:flex; gap:8px; margin-bottom:8px; }
+  .tabs button[aria-pressed=true] { border-color:var(--accent); color:var(--accent); }
+  canvas { display:block; width:100%; height:auto; border:1px solid var(--line); background:#fff; image-rendering:pixelated; }
+  #status { min-height:1.4em; margin:8px 0; }
+  #status.err { color:var(--err); }
+  progress { width:100%; }
+  pre { background:transparent; border:1px solid var(--line); border-radius:6px; padding:8px; font-size:.8rem; max-height:140px; overflow:auto; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Badge over Bluetooth</h1>
+<p class="hint">Needs Chrome or Edge (Android, desktop) with Web Bluetooth, or the Bluefy app on iPhone. Not available in Safari. The page must be opened over https (or from localhost); everything runs in your browser, nothing is uploaded.</p>
+<p id="support" class="hint" hidden style="color:var(--err)"></p>
+
+<fieldset>
+  <legend>1. Connect</legend>
+  <div class="row">
+    <div><label for="prefix">Badge name starts with</label><input type="text" id="prefix" value="Badge"></div>
+  </div>
+  <p style="margin:10px 0 0"><button id="connect" class="primary">Connect</button> <span id="conn">not connected</span></p>
+  <p class="hint" style="margin:8px 0 0">The first time, the phone or computer asks for the badge's passkey (<code>CONFIG_BADGE_BLE_PASSKEY</code>, default 123456: change it).</p>
+</fieldset>
+
+<fieldset>
+  <legend>2. Page</legend>
+  <div class="tabs">
+    <button id="tab-text" aria-pressed="true">Text</button>
+    <button id="tab-image" aria-pressed="false">Picture</button>
+  </div>
+  <div id="pane-text">
+    <label for="text">Text (one line per line)</label>
+    <textarea id="text">Back in 5 minutes</textarea>
+    <div class="row">
+      <div><label for="align">Alignment</label><select id="align"><option>center</option><option>left</option><option>right</option></select></div>
+    </div>
+  </div>
+  <div id="pane-image" hidden>
+    <label for="file">Picture</label>
+    <input type="file" id="file" accept="image/*">
+    <div class="row">
+      <div><label for="fit">Fit</label><select id="fit"><option value="contain">contain (whole picture)</option><option value="cover">cover (fill, crop)</option></select></div>
+      <div><label for="dither">Black and white</label><select id="dither"><option value="threshold">threshold (logos)</option><option value="floyd">dithering (photos)</option></select></div>
+    </div>
+  </div>
+  <div class="row">
+    <div><label for="rotate">Rotate</label><select id="rotate"><option value="0">0 (landscape)</option><option value="90">90 (portrait, top on the left)</option><option value="270">270 (portrait, top on the right)</option><option value="180">180</option></select></div>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>3. Preview (what the panel will show)</legend>
+  <canvas id="preview"></canvas>
+  <p style="margin:10px 0 0"><button id="send" class="primary" disabled>Send to badge</button></p>
+  <progress id="bar" value="0" max="100" hidden></progress>
+  <div id="status"></div>
+  <pre id="log" hidden></pre>
+</fieldset>
+
+<script>
+(function () {
+  const el = document.getElementById("support");
+  let msg = "";
+  if (!window.isSecureContext) msg = "This page is not served over https, so Web Bluetooth is blocked. Use the https address or localhost.";
+  else if (!navigator.bluetooth) msg = "Web Bluetooth is not available in this browser. Use Chrome or Edge (Android or desktop), or Bluefy on iPhone.";
+  if (msg) { el.textContent = msg; el.hidden = false; }
+})();
+</script>
+<script>
+"use strict";
+const NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // we write here
+const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // badge notifies here
+const $ = (id) => document.getElementById(id);
+
+let panel = { w: 800, h: 480 };   // replaced by the badge's INFO reply
+let chars = null;                 // { rx, tx }
+let device = null;
+let sourceImage = null;
+let rxText = "";
+let waiters = [];                 // pending waits for "BADGE ..." replies
+
+// ---------------------------------------------------------------- CRC32 and packets
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function packet(cmd, payload) {
+  const out = new Uint8Array(4 + 1 + 4 + payload.length + 4);
+  const dv = new DataView(out.buffer);
+  out.set([0x42, 0x44, 0x47, 0x31], 0);            // "BDG1"
+  out[4] = cmd.charCodeAt(0);
+  dv.setUint32(5, payload.length, true);
+  out.set(payload, 9);
+  dv.setUint32(9 + payload.length, crc32(payload), true);
+  return out;
+}
+
+// ---------------------------------------------------------------- page rendering
+function wrapLines(ctx, text, maxW) {
+  const lines = [];
+  for (const para of text.split("\n")) {
+    let cur = "";
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const trial = cur ? cur + " " + word : word;
+      if (ctx.measureText(trial).width <= maxW) { cur = trial; continue; }
+      if (cur) lines.push(cur);
+      cur = word;
+      while (ctx.measureText(cur).width > maxW && cur.length > 1) { // very long word: split
+        let cut = cur.length - 1;
+        while (cut > 1 && ctx.measureText(cur.slice(0, cut)).width > maxW) cut--;
+        lines.push(cur.slice(0, cut));
+        cur = cur.slice(cut);
+      }
+    }
+    lines.push(cur);
+  }
+  return lines;
+}
+
+function drawText(ctx, cw, ch) {
+  const margin = Math.round(Math.min(cw, ch) / 128 * 6);
+  const maxW = cw - 2 * margin, maxH = ch - 2 * margin;
+  const text = $("text").value;
+  const align = $("align").value;
+  let chosen = null;
+  for (let size = Math.floor(ch * 0.6); size >= 8; size -= 2) {
+    ctx.font = `bold ${size}px DejaVu Sans, Arial, sans-serif`;
+    const lines = wrapLines(ctx, text, maxW);
+    const lh = Math.round(size * 1.2);
+    if (lines.length * lh <= maxH) { chosen = { size, lines, lh }; break; }
+  }
+  if (!chosen) {
+    ctx.font = "bold 8px sans-serif";
+    chosen = { size: 8, lines: wrapLines(ctx, text, maxW).slice(0, Math.floor(maxH / 10)), lh: 10 };
+  }
+  ctx.font = `bold ${chosen.size}px DejaVu Sans, Arial, sans-serif`;
+  ctx.fillStyle = "#000";
+  ctx.textBaseline = "top";
+  let y = margin + (maxH - chosen.lines.length * chosen.lh) / 2;
+  for (const line of chosen.lines) {
+    const w = ctx.measureText(line).width;
+    const x = align === "left" ? margin : align === "right" ? cw - margin - w : (cw - w) / 2;
+    ctx.fillText(line, x, y);
+    y += chosen.lh;
+  }
+}
+
+function drawPicture(ctx, cw, ch) {
+  if (!sourceImage) return;
+  const iw = sourceImage.naturalWidth, ih = sourceImage.naturalHeight;
+  const cover = $("fit").value === "cover";
+  const s = cover ? Math.max(cw / iw, ch / ih) : Math.min(cw / iw, ch / ih);
+  const w = iw * s, h = ih * s;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(sourceImage, (cw - w) / 2, (ch - h) / 2, w, h);
+}
+
+// Black and white, like tools/make_badge.py: threshold >= 160 is white; or Floyd-Steinberg.
+function toMono(imageData, dither) {
+  const { width: w, height: h, data } = imageData;
+  const g = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const a = data[i * 4 + 3] / 255;
+    const lum = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    g[i] = lum * a + 255 * (1 - a);
+  }
+  const white = new Uint8Array(w * h);
+  if (dither === "floyd") {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x, old = g[i], nw = old < 128 ? 0 : 255, err = old - nw;
+        white[i] = nw ? 1 : 0;
+        if (x + 1 < w) g[i + 1] += err * 7 / 16;
+        if (y + 1 < h) {
+          if (x > 0) g[i + w - 1] += err * 3 / 16;
+          g[i + w] += err * 5 / 16;
+          if (x + 1 < w) g[i + w + 1] += err * 1 / 16;
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < w * h; i++) white[i] = g[i] >= 160 ? 1 : 0;
+  }
+  return white;
+}
+
+// Returns the page as W*H "white" flags (1 = white), drawn for the current rotation.
+function renderPage() {
+  const rot = parseInt($("rotate").value, 10);
+  const W = panel.w, H = panel.h;
+  const [cw, ch] = rot === 90 || rot === 270 ? [H, W] : [W, H];
+  const src = document.createElement("canvas");
+  src.width = cw; src.height = ch;
+  const sctx = src.getContext("2d", { willReadFrequently: true });
+  sctx.fillStyle = "#fff"; sctx.fillRect(0, 0, cw, ch);
+  if ($("tab-text").getAttribute("aria-pressed") === "true") drawText(sctx, cw, ch);
+  else drawPicture(sctx, cw, ch);
+
+  // Picture pages are reduced to 1 bit before turning, so rotation never blurs them.
+  const mode = $("tab-text").getAttribute("aria-pressed") === "true" ? "threshold" : $("dither").value;
+  const flags = toMono(sctx.getImageData(0, 0, cw, ch), mode);
+  const mono = new ImageData(cw, ch);
+  for (let i = 0; i < cw * ch; i++) {
+    const v = flags[i] ? 255 : 0;
+    mono.data.set([v, v, v, 255], i * 4);
+  }
+  sctx.putImageData(mono, 0, 0);
+
+  const dst = document.createElement("canvas");
+  dst.width = W; dst.height = H;
+  const dctx = dst.getContext("2d", { willReadFrequently: true });
+  dctx.fillStyle = "#fff"; dctx.fillRect(0, 0, W, H);
+  dctx.imageSmoothingEnabled = false;
+  if (rot === 90) { dctx.translate(0, H); dctx.rotate(-Math.PI / 2); }          // counter-clockwise
+  else if (rot === 270) { dctx.translate(W, 0); dctx.rotate(Math.PI / 2); }
+  else if (rot === 180) { dctx.translate(W, H); dctx.rotate(Math.PI); }
+  dctx.drawImage(src, 0, 0);
+  return dst;
+}
+
+function packFrame(canvas) {
+  const W = canvas.width, H = canvas.height, rb = (W + 7) >> 3;
+  const px = canvas.getContext("2d").getImageData(0, 0, W, H).data;
+  const out = new Uint8Array(rb * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (px[(y * W + x) * 4] >= 128) out[y * rb + (x >> 3)] |= 0x80 >> (x & 7);   // 1 = white, MSB left
+  return out;
+}
+
+function refreshPreview() {
+  const c = renderPage();
+  const p = $("preview");
+  p.width = c.width; p.height = c.height;
+  p.getContext("2d").drawImage(c, 0, 0);
+}
+
+// ---------------------------------------------------------------- Bluetooth
+function setStatus(msg, isErr) { const s = $("status"); s.textContent = msg; s.className = isErr ? "err" : ""; }
+function log(msg) { const l = $("log"); l.hidden = false; l.textContent += msg + "\n"; l.scrollTop = l.scrollHeight; }
+
+function onNotify(ev) {
+  rxText += new TextDecoder().decode(ev.target.value);
+  let i;
+  while ((i = rxText.indexOf("\n")) >= 0) {
+    const line = rxText.slice(0, i).trim();
+    rxText = rxText.slice(i + 1);
+    const m = line.match(/BADGE (OK|ERR) (.*)$/);
+    if (!m) continue;
+    log(line);
+    waiters = waiters.filter((w) => {
+      if (m[1] === "ERR") { w.reject(new Error(m[2])); return false; }
+      if (m[2].startsWith(w.what)) { w.resolve(m[2]); return false; }
+      return true;
+    });
+  }
+}
+function waitFor(what, ms) {
+  return new Promise((resolve, reject) => {
+    const w = { what, resolve, reject };
+    waiters.push(w);
+    setTimeout(() => { if (waiters.includes(w)) { waiters = waiters.filter((x) => x !== w); reject(new Error(`no "${what}" reply within ${ms / 1000} s`)); } }, ms);
+  });
+}
+
+async function write(bytes) {
+  const rx = chars.rx;
+  if (rx.writeValueWithResponse) await rx.writeValueWithResponse(bytes);
+  else await rx.writeValue(bytes);
+}
+
+let chunkSize = 200;     // fits the 247-byte ATT MTU; falls back to 20 if the link refuses
+async function writeAll(bytes) {
+  const bar = $("bar"); bar.hidden = false; bar.max = bytes.length; bar.value = 0;
+  for (let off = 0; off < bytes.length; ) {
+    const part = bytes.subarray(off, off + chunkSize);
+    try { await write(part); }
+    catch (e) {
+      if (chunkSize > 20) { chunkSize = 20; log("write refused, retrying with 20-byte chunks"); continue; }
+      throw e;
+    }
+    off += part.length; bar.value = off;
+  }
+  bar.hidden = true;
+}
+
+async function connect() {
+  if (!navigator.bluetooth) { setStatus("Web Bluetooth is not available in this browser.", true); return; }
+  try {
+    setStatus("Choose the badge in the browser's list...");
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: $("prefix").value || "Badge" }],
+      optionalServices: [NUS],
+    });
+    device.addEventListener("gattserverdisconnected", () => {
+      chars = null; $("conn").textContent = "disconnected"; $("send").disabled = true;
+    });
+    $("conn").textContent = "connecting (a pairing request with the passkey may appear)...";
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS);
+    chars = { rx: await svc.getCharacteristic(NUS_RX), tx: await svc.getCharacteristic(NUS_TX) };
+    chars.tx.addEventListener("characteristicvaluechanged", onNotify);
+    await chars.tx.startNotifications();
+
+    const info = waitFor("info", 8000);
+    await write(packet("I", new Uint8Array(0)));
+    const m = (await info).match(/info (\d+)x(\d+)/);
+    if (m) { panel = { w: +m[1], h: +m[2] }; }
+    $("conn").textContent = `connected to ${device.name} (${panel.w}x${panel.h})`;
+    $("send").disabled = false;
+    setStatus("");
+    refreshPreview();
+  } catch (e) {
+    setStatus("Connection failed: " + e.message, true);
+  }
+}
+
+async function send() {
+  $("send").disabled = true;
+  try {
+    const data = packFrame(renderPage());
+    const pkt = packet("F", data);
+    setStatus("Sending...");
+    const received = waitFor("received", 60000);
+    received.catch(() => {});
+    await writeAll(pkt);
+    await received;
+    setStatus("Received. Refreshing the panel (about 15 s)...");
+    await waitFor("shown", 90000);
+    setStatus("Done.");
+  } catch (e) {
+    setStatus("Failed: " + e.message, true);
+  } finally {
+    $("bar").hidden = true;
+    $("send").disabled = !chars;
+  }
+}
+
+// ---------------------------------------------------------------- UI
+function tab(name) {
+  $("tab-text").setAttribute("aria-pressed", name === "text");
+  $("tab-image").setAttribute("aria-pressed", name === "image");
+  $("pane-text").hidden = name !== "text";
+  $("pane-image").hidden = name !== "image";
+  refreshPreview();
+}
+$("tab-text").onclick = () => tab("text");
+$("tab-image").onclick = () => tab("image");
+for (const id of ["text", "align", "fit", "dither", "rotate"]) $(id).addEventListener("input", refreshPreview);
+$("file").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => { sourceImage = img; refreshPreview(); };
+  img.src = URL.createObjectURL(f);
+});
+$("connect").onclick = connect;
+$("send").onclick = send;
+refreshPreview();
+</script>
+</body>
+</html>

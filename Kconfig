@@ -24,4 +24,20 @@ config BADGE_REMOTE
 	help
 	  Fire and forget: the page is drawn and not stored.
 
+config BADGE_BLE
+	bool "Accept pages over Bluetooth LE (Nordic UART Service)"
+	depends on BT
+	help
+	  Needs the Bluetooth options in ble.conf (build with -DEXTRA_CONF_FILE=ble.conf).
+
+config BADGE_BLE_PASSKEY
+	int "Fixed 6-digit passkey required to connect (0 = open, no security)"
+	depends on BADGE_BLE
+	default 123456
+	range 0 999999
+	help
+	  CHANGE THIS before using the badge in public: it is public in this repository.
+	  With 0 anyone in radio range can overwrite the displayed page (for testing only; also
+	  also remove CONFIG_BT_APP_PASSKEY from ble.conf if you want no pairing at all).
+
 source "Kconfig.zephyr"

@@ -1,6 +1,7 @@
 /*
  * "Fire and forget" remote pages: a host sends one frame over the console serial port
- * (USB CDC on the board, a pseudo-terminal in the simulator); the badge shows it.
+ * (USB CDC on the board, a pseudo-terminal in the simulator) or over Bluetooth LE (Nordic UART
+ * Service, see ble.c); the badge shows it. Same packets on both.
  * Nothing is stored: the page stays on the e-paper (which keeps it without power) until
  * a key is pressed. Host side: tools/send_badge.py.
  *
@@ -31,6 +32,9 @@ struct remote_cfg {
 
 /* Start the receiver thread. */
 void remote_start(const struct remote_cfg *cfg);
+
+/* Feed bytes received over Bluetooth (called by ble.c). One sender at a time, USB or BLE. */
+void remote_feed_ble(const uint8_t *data, size_t len);
 
 /* Call once the frame in cfg->buf has been drawn (err = display result): releases the buffer. */
 void remote_shown(int err);
