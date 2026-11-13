@@ -29,6 +29,8 @@ jobs:
         run: |
           mkdir site
           cp tools/badge_ble.html site/index.html
+          sed -i "s/__BUILD__/$(git rev-parse --short HEAD) $(date -u +'%Y-%m-%d %H:%M') UTC/" site/index.html
+          grep -c "UTC" site/index.html
           touch site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

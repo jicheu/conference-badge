@@ -313,17 +313,25 @@ async function write(bytes) {
   else await rx.writeValue(bytes);
 }
 
-let chunkSize = 200;     // fits the 247-byte ATT MTU; falls back to 20 if the link refuses
+// Largest acknowledged write that fits one ATT packet. iPhone negotiates 185 (182 usable),
+// Android up to 247. A longer write becomes a "long write", which the badge does not
+// support (ATT error 6, "request not supported"). We step down until a size is accepted.
+const SIZES = [180, 100, 20];
+let sizeIdx = 0, chunkSize = SIZES[0];
 async function writeAll(bytes) {
   const bar = $("bar"); bar.hidden = false; bar.max = bytes.length; bar.value = 0;
   for (let off = 0; off < bytes.length; ) {
     const part = bytes.subarray(off, off + chunkSize);
     try { await write(part); }
     catch (e) {
-      if (chunkSize > 20) {
-        chunkSize = 20; noResponse = !!(chars.rx.properties && chars.rx.properties.writeWithoutResponse);
-        log("long write refused (normal: the link uses the default 23-byte packets), sending 20-byte chunks" + (noResponse ? " without acknowledgement" : ""));
+      if (off > 0 && !noResponse) throw e;          // refusals can only be a size problem on the very first write
+      if (sizeIdx < SIZES.length - 1) {
+        chunkSize = SIZES[++sizeIdx];
+        log(`write of ${part.length} bytes refused (${describe(e)}), trying ${chunkSize}`);
         continue;
+      }
+      if (!noResponse && chars.rx.properties && chars.rx.properties.writeWithoutResponse) {
+        noResponse = true; log("acknowledged writes refused, trying unacknowledged writes"); continue;
       }
       throw e;
     }
