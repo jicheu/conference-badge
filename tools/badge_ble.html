@@ -32,6 +32,7 @@
 </head>
 <body>
 <h1>Badge over Bluetooth</h1>
+<p class="hint" style="margin-bottom:4px">Page version: <b id="ver">__BUILD__</b> &middot; <a href="#" id="reload">reload latest</a></p>
 <p class="hint">Needs Chrome or Edge (Android, desktop) with Web Bluetooth, or the Bluefy app on iPhone. Not available in Safari. The page must be opened over https (or from localhost); everything runs in your browser, nothing is uploaded.</p>
 <p id="support" class="hint" hidden style="color:var(--err)"></p>
 
@@ -90,6 +91,12 @@
 </script>
 <script>
 "use strict";
+{
+  // __BUILD__ is replaced by the publishing workflow (commit and UTC time); a local file shows "local file".
+  const v = document.getElementById("ver");
+  if (v.textContent.startsWith("__")) v.textContent = "local file";
+  document.getElementById("reload").onclick = (e) => { e.preventDefault(); location.replace(location.pathname + "?r=" + Date.now()); };
+}
 const NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // we write here
 const NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // badge notifies here

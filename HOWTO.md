@@ -114,7 +114,7 @@ python3 tools/send_badge.py --image photo.jpg --preview /tmp/test.png      # jus
 
 ## 4. Send from a phone over Bluetooth
 
-Build with Bluetooth (add `-DEXTRA_CONF_FILE=ble.conf` to the board build; for the 2.13" panel use `"-DEXTRA_CONF_FILE=boards/panel_2in13.conf;ble.conf"`), flash, then open the hosted page (`https://<your-user>.github.io/<your-repo>/`, see README "Hosting the page") or `tools/badge_ble.html` in Chrome or Edge (Android or desktop; iPhone: Bluefy app):
+Build with Bluetooth (add `-DEXTRA_CONF_FILE=ble.conf` to the board build; for the 2.13" panel use `"-DEXTRA_CONF_FILE=boards/panel_2in13.conf;ble.conf"`), flash, then open the hosted page (`https://<your-user>.github.io/<your-repo>/`, built with `tools/publish_page.sh`, see README "Hosting the page") or `tools/badge_ble.html` in Chrome or Edge (Android or desktop; iPhone: Bluefy app):
 
 1. Connect, choose the device `Badge`, enter the passkey (default **123456**: change it with `-DCONFIG_BADGE_BLE_PASSKEY=654321`).
 2. Type text or pick a picture, check the preview, Send.

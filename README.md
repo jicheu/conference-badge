@@ -12,7 +12,7 @@ Name, title and QR code on a reusable e-paper badge running Zephyr, plus any tex
 |---|---|
 | `tools/make_badge.py` | JSON to `src/badge_images.h` (built-in pages) and preview PNGs |
 | `tools/send_badge.py` | send one text or picture to a running badge over USB |
-| `tools/badge_ble.html` | same, over Bluetooth LE from a browser (Web Bluetooth); published by `.github/workflows/pages.yml` |
+| `tools/badge_ble.html` | same, over Bluetooth LE from a browser (Web Bluetooth);; hosted copy built by `tools/publish_page.sh` into `docs/` |
 | `badges.example.json`, `badges.basic.json`, `badges.2in13.json` | example inputs (full, minimal, 2.13" panel) |
 | `src/main.c`, `src/ssd1677.c`, `src/remote.c`, `src/ble.c` | firmware: pages and keys, display driver, packet receiver, Bluetooth transport |
 | `ble.conf` | Bluetooth build options (`-DEXTRA_CONF_FILE=ble.conf`) |
@@ -247,14 +247,16 @@ workshop run zephyr-26-04 -- build -p always -b xiao_ble/nrf52840 /project/confe
 
 **Security: change the passkey.** The badge requires an authenticated link (`BT_GATT_PERM_WRITE_AUTHEN`) with the fixed passkey `CONFIG_BADGE_BLE_PASSKEY` (default **123456**, public in this repository). Change it before wearing the badge in public: add `-DCONFIG_BADGE_BLE_PASSKEY=654321` to the build, or edit the default in `Kconfig`. A fixed passkey is a deterrent for pranksters, not strong security. Without it (`CONFIG_BADGE_BLE_PASSKEY=0`), anyone in radio range can overwrite the page. Only one sender at a time (USB or BLE).
 
-**Hosting the page (GitHub Pages).** Web Bluetooth only works on https, so on a phone the easiest way is to host the page. The repository contains `.github/workflows/pages.yml`, which publishes `tools/badge_ble.html` as the site's `index.html` (one file, no build, no secrets, nothing is sent to the server: the picture and the Bluetooth link stay in your browser).
+**Hosting the page (GitHub Pages, no Actions needed).** Web Bluetooth only works on https, so on a phone the easiest way is to host the page. Nothing is sent to the server: the picture and the Bluetooth link stay in your browser.
 
-1. Push to `main`.
-2. In the GitHub repository: Settings, Pages, Source = **GitHub Actions** (once).
-3. The workflow runs (Actions tab); the address is `https://<your-user>.github.io/<your-repo>/`.
-4. Open it on the phone (Chrome on Android; **Bluefy** on iPhone, untested), and bookmark it.
+1. Run `tools/publish_page.sh`. It writes `docs/index.html`, a copy of `tools/badge_ble.html` with a version stamp (date and a short hash of the page).
+2. Commit and push `docs/` to `main`.
+3. In the GitHub repository: Settings, Pages, Source = **Deploy from a branch**, branch `main`, folder `/docs` (once).
+4. The address is `https://<your-user>.github.io/<your-repo>/`. Open it on the phone (Chrome on Android; **Bluefy** on iPhone), and bookmark it.
 
-If the repository is private, Pages needs a paid plan; otherwise use `python3 -m http.server` as above. Anyone who knows the address can open the page, but it can only talk to a badge within Bluetooth range that accepts their passkey.
+**Is the phone on the latest page?** The page shows `Page version: <hash> <date> UTC` under the title; compare it with the line printed by `publish_page.sh`. The "reload latest" link bypasses the phone's cache. A page opened from a local file shows "local file". Run the script again after every change of `tools/badge_ble.html`.
+
+If the repository is private, Pages needs a paid plan; otherwise use `python3 -m http.server` as above, or copy `docs/index.html` to any https site you control.
 
 **Own sender:** write the packets of `src/remote.h` to the RX characteristic (`6e400002-b5a3-f393-e0a9-e50e24dcca9e`) and read the reply lines from the TX characteristic (`6e400003-...`, notifications, in 20-byte pieces).
 
