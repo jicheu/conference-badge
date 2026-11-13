@@ -305,9 +305,11 @@ function waitFor(what, ms) {
   });
 }
 
+let noResponse = false;  // set when we fall back to 20-byte chunks: much faster than one acknowledged write each
 async function write(bytes) {
   const rx = chars.rx;
-  if (rx.writeValueWithResponse) await rx.writeValueWithResponse(bytes);
+  if (noResponse && rx.writeValueWithoutResponse) await rx.writeValueWithoutResponse(bytes);
+  else if (rx.writeValueWithResponse) await rx.writeValueWithResponse(bytes);
   else await rx.writeValue(bytes);
 }
 
@@ -318,7 +320,11 @@ async function writeAll(bytes) {
     const part = bytes.subarray(off, off + chunkSize);
     try { await write(part); }
     catch (e) {
-      if (chunkSize > 20) { chunkSize = 20; log("write refused, retrying with 20-byte chunks"); continue; }
+      if (chunkSize > 20) {
+        chunkSize = 20; noResponse = !!(chars.rx.properties && chars.rx.properties.writeWithoutResponse);
+        log("long write refused (normal: the link uses the default 23-byte packets), sending 20-byte chunks" + (noResponse ? " without acknowledgement" : ""));
+        continue;
+      }
       throw e;
     }
     off += part.length; bar.value = off;
@@ -363,7 +369,7 @@ async function send() {
     const data = packFrame(renderPage());
     const pkt = packet("F", data);
     setStatus("Sending...");
-    const received = waitFor("received", 60000);
+    const received = waitFor("received", 240000);
     received.catch(() => {});
     await writeAll(pkt);
     await received;
