@@ -270,6 +270,15 @@ function refreshPreview() {
 
 // ---------------------------------------------------------------- Bluetooth
 function setStatus(msg, isErr) { const s = $("status"); s.textContent = msg; s.className = isErr ? "err" : ""; }
+function describe(e) {
+  // Never print "undefined": some browser errors carry no message.
+  const name = (e && e.name) || typeof e;
+  const msg = (e && e.message) || (typeof e === "string" ? e : "") || (e && e.toString && e.toString() !== "[object Object]" ? e.toString() : "");
+  let text = msg && msg !== name ? `${name}: ${msg}` : String(name);
+  if (/NotAllowed|Network|Security|GATT|authenticat|permission/i.test(text))
+    text += " (the badge probably refused the write: the link is not paired with the passkey; see README, Bluetooth pairing)";
+  return text;
+}
 function log(msg) { const l = $("log"); l.hidden = false; l.textContent += msg + "\n"; l.scrollTop = l.scrollHeight; }
 
 function onNotify(ev) {
@@ -344,7 +353,7 @@ async function connect() {
     setStatus("");
     refreshPreview();
   } catch (e) {
-    setStatus("Connection failed: " + e.message, true);
+    console.error(e); setStatus("Connection failed: " + describe(e), true);
   }
 }
 
@@ -362,7 +371,7 @@ async function send() {
     await waitFor("shown", 90000);
     setStatus("Done.");
   } catch (e) {
-    setStatus("Failed: " + e.message, true);
+    console.error(e); log("error: " + describe(e)); setStatus("Failed: " + describe(e), true);
   } finally {
     $("bar").hidden = true;
     $("send").disabled = !chars;
