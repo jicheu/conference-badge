@@ -63,8 +63,18 @@ static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr, c
 {
 	ARG_UNUSED(conn);
 	ARG_UNUSED(attr);
-	ARG_UNUSED(offset);
-	ARG_UNUSED(flags);
+	/* A long write (iPhone/Bluefy use it above 20 bytes) first sends the pieces as
+	 * "prepare" requests, which are only a check, then calls us again with the same
+	 * data in order at "execute" time. Feed the data only once. */
+	static uint32_t n_writes;
+
+	if (n_writes < 8 || (n_writes % 200) == 0 || (flags & BT_GATT_WRITE_FLAG_PREPARE)) {
+		LOG_INF("BLE write #%u: %u bytes, offset %u, flags 0x%x", n_writes, len, offset, flags);
+	}
+	n_writes++;
+	if (flags & BT_GATT_WRITE_FLAG_PREPARE) {
+		return len;
+	}
 
 	remote_feed_ble(buf, len);
 
@@ -86,6 +96,14 @@ BT_GATT_SERVICE_DEFINE(badge_svc,
 			       NULL, NULL, NULL),
 	BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | PERM_WRITE),
 );
+
+static void mtu_updated(struct bt_conn *conn, uint16_t tx, uint16_t rx)
+{
+	ARG_UNUSED(conn);
+	LOG_INF("ATT MTU: tx %u, rx %u", tx, rx);
+}
+
+static struct bt_gatt_cb gatt_cb = {.att_mtu_updated = mtu_updated};
 
 static void advertise(void)
 {
@@ -203,6 +221,8 @@ int ble_start(void)
 		LOG_ERR("bt_enable failed (%d)", err);
 		return err;
 	}
+
+	bt_gatt_cb_register(&gatt_cb);
 
 	k_thread_create(&tx_thread_data, tx_stack, K_THREAD_STACK_SIZEOF(tx_stack), tx_thread, NULL,
 			NULL, NULL, K_PRIO_PREEMPT(9), 0, K_NO_WAIT);
