@@ -32,7 +32,7 @@
 </head>
 <body>
 <h1>Badge over Bluetooth</h1>
-<p class="hint" style="margin-bottom:4px">Page version: <b id="ver">6221f65 2026-11-13 13:17 UTC</b> &middot; <a href="#" id="reload">reload latest</a></p>
+<p class="hint" style="margin-bottom:4px">Page version: <b id="ver">a20c218 2026-11-13 13:20 UTC</b> &middot; <a href="#" id="reload">reload latest</a></p>
 <p class="hint">Needs Chrome or Edge (Android, desktop) with Web Bluetooth, or the Bluefy app on iPhone. Not available in Safari. The page must be opened over https (or from localhost); everything runs in your browser, nothing is uploaded.</p>
 <p id="support" class="hint" hidden style="color:var(--err)"></p>
 
@@ -92,7 +92,7 @@
 <script>
 "use strict";
 {
-  // 6221f65 2026-11-13 13:17 UTC is replaced by the publishing workflow (commit and UTC time); a local file shows "local file".
+  // a20c218 2026-11-13 13:20 UTC is replaced by the publishing workflow (commit and UTC time); a local file shows "local file".
   const v = document.getElementById("ver");
   if (v.textContent.startsWith("__")) v.textContent = "local file";
   document.getElementById("reload").onclick = (e) => { e.preventDefault(); location.replace(location.pathname + "?r=" + Date.now()); };
@@ -278,6 +278,7 @@ function refreshPreview() {
 // ---------------------------------------------------------------- Bluetooth
 function setStatus(msg, isErr) { const s = $("status"); s.textContent = msg; s.className = isErr ? "err" : ""; }
 function describe(e) {
+  if (typeof e === "number") return "error code " + e + " (reported by the browser, no text)";
   // Never print "undefined": some browser errors carry no message.
   const name = (e && e.name) || typeof e;
   const msg = (e && e.message) || (typeof e === "string" ? e : "") || (e && e.toString && e.toString() !== "[object Object]" ? e.toString() : "");
@@ -314,10 +315,14 @@ function waitFor(what, ms) {
 
 let noResponse = false;  // set when we fall back to 20-byte chunks: much faster than one acknowledged write each
 async function write(bytes) {
+  if (!chars) throw new Error("badge disconnected");
   const rx = chars.rx;
-  if (noResponse && rx.writeValueWithoutResponse) await rx.writeValueWithoutResponse(bytes);
-  else if (rx.writeValueWithResponse) await rx.writeValueWithResponse(bytes);
-  else await rx.writeValue(bytes);
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error("write timed out (Bluetooth link lost?)")), 10000); });
+  const op = noResponse && rx.writeValueWithoutResponse ? rx.writeValueWithoutResponse(bytes)
+           : rx.writeValueWithResponse ? rx.writeValueWithResponse(bytes) : rx.writeValue(bytes);
+  op.catch(() => {});
+  try { await Promise.race([op, timeout]); } finally { clearTimeout(t); }
 }
 
 // Largest acknowledged write that fits one ATT packet. iPhone negotiates 185 (182 usable),
@@ -331,7 +336,7 @@ async function writeAll(bytes) {
     const part = bytes.subarray(off, off + chunkSize);
     try { await write(part); }
     catch (e) {
-      if (off > 0 && !noResponse) throw e;          // refusals can only be a size problem on the very first write
+      if (!chars || off > 0 && !noResponse) throw e;          // refusals can only be a size problem on the very first write
       if (sizeIdx < SIZES.length - 1) {
         chunkSize = SIZES[++sizeIdx];
         log(`write of ${part.length} bytes refused (${describe(e)}), trying ${chunkSize}`);
@@ -357,6 +362,9 @@ async function connect() {
     });
     device.addEventListener("gattserverdisconnected", () => {
       chars = null; $("conn").textContent = "disconnected"; $("send").disabled = true;
+      log("badge disconnected");
+      const ws = waiters; waiters = [];
+      ws.forEach((w) => w.reject(new Error("badge disconnected (it may have reset, or refused the link)")));
     });
     $("conn").textContent = "connecting (a pairing request with the passkey may appear)...";
     const server = await device.gatt.connect();
