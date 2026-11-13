@@ -32,7 +32,7 @@
 </head>
 <body>
 <h1>Badge over Bluetooth</h1>
-<p class="hint" style="margin-bottom:4px">Page version: <b id="ver">ce9bd58 2026-11-13 13:37 UTC</b> &middot; <a href="#" id="reload">reload latest</a></p>
+<p class="hint" style="margin-bottom:4px">Page version: <b id="ver">5bb668f 2026-11-13 13:42 UTC</b> &middot; <a href="#" id="reload">reload latest</a></p>
 <p class="hint">Needs Chrome or Edge (Android, desktop) with Web Bluetooth, or the Bluefy app on iPhone. Not available in Safari. The page must be opened over https (or from localhost); everything runs in your browser, nothing is uploaded.</p>
 <p id="support" class="hint" hidden style="color:var(--err)"></p>
 
@@ -98,7 +98,7 @@
 <script>
 "use strict";
 {
-  // ce9bd58 2026-11-13 13:37 UTC is replaced by the publishing workflow (commit and UTC time); a local file shows "local file".
+  // 5bb668f 2026-11-13 13:42 UTC is replaced by the publishing workflow (commit and UTC time); a local file shows "local file".
   const v = document.getElementById("ver");
   if (v.textContent.startsWith("__")) v.textContent = "local file";
   document.getElementById("reload").onclick = (e) => { e.preventDefault(); location.replace(location.pathname + "?r=" + Date.now()); };
@@ -319,6 +319,8 @@ function waitFor(what, ms) {
   });
 }
 
+// Each chunk is COPIED (slice, not subarray): a subarray is a view on the whole 48 KB buffer, and some
+// Web Bluetooth implementations (Bluefy) send the entire underlying buffer instead of just the view.
 let noResponse = false;  // set when we fall back to 20-byte chunks: much faster than one acknowledged write each
 async function write(bytes) {
   if (!chars) throw new Error("badge disconnected");
@@ -344,14 +346,14 @@ async function writeAll(bytes) {
     const size = Math.max(1, parseInt($("wsize").value, 10) || 20);
     log(`manual: ${size} bytes per write, ${noResponse ? "without" : "with"} response`);
     for (let off = 0; off < bytes.length; off += size) {
-      await write(bytes.subarray(off, off + size));
+      await write(bytes.slice(off, off + size));
       bar.value = Math.min(off + size, bytes.length);
     }
     bar.hidden = true;
     return;
   }
   for (let off = 0; off < bytes.length; ) {
-    const part = bytes.subarray(off, off + chunkSize);
+    const part = bytes.slice(off, off + chunkSize);
     try { await write(part); }
     catch (e) {
       if (!chars || off > 0 && !noResponse) throw e;          // refusals can only be a size problem on the very first write
