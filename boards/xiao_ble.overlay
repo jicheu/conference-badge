@@ -1,6 +1,7 @@
 /*
- * Conference badge: XIAO nRF52840 Plus on a Seeed XIAO ePaper Display Board EN04,
- * with a 2.9" monochrome 296x128 panel (SSD1680) on the 24-pin FPC connector.
+ * Conference badge: XIAO nRF52840 on a Seeed XIAO ePaper Display Board EN04, with the
+ * Seeed 4.26" monochrome 800x480 panel (SSD1677, ref MOB260722009) on the FPC connector.
+ * Zephyr has no SSD1677 driver: src/ssd1677.c and dts/bindings/seeed,ssd1677.yaml add one.
  *
  * Pin sources
  *   - Buttons, battery sense:  Seeed wiki, "Getting Started with EN04".
@@ -19,9 +20,7 @@
  *   DC and RST are the two to check first if the panel stays blank: confirm
  *   against the EN04 schematic (Seeed wiki, Resources) and swap here if needed.
  *
- * Panel: 2.9" mono is driven by Seeed_GFX2 as SSD1680, 296x128. The values below
- * follow Zephyr's own SSD1680 shield overlay (waveshare_epaper_gdey0213b74),
- * with the panel size changed. Border waveform / tssv are carried over, not tuned.
+ * Panel: Seeed_GFX2 drives the 4.26" as SSD1677, 800x480, glass mirrored horizontally.
  */
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
@@ -70,25 +69,15 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		epd: ssd1680@0 {
-			compatible = "solomon,ssd1680";
+		epd: ssd1677@0 {
+			compatible = "seeed,ssd1677"; /* out-of-tree driver: src/ssd1677.c */
 			reg = <0>;
 			mipi-max-frequency = <4000000>;
-			/* Native orientation: 296 gate lines wide, 128 source lines tall. */
-			width = <296>;
-			height = <128>;
+			width = <800>;
+			height = <480>;
+			/* The Seeed 4.26" glass is horizontally mirrored (Seeed_GFX2: mirror = true). */
+			mirror-x;
 			busy-gpios = <&xiao_d 3 GPIO_ACTIVE_HIGH>;
-
-			tssv = <0x80>;
-
-			/*
-			 * Only a "full" profile: no "partial" node means partial refresh
-			 * stays disabled, so every update is a full, ghost-free refresh.
-			 * That is what a badge wants; speed does not matter.
-			 */
-			full {
-				border-waveform = <0x05>;
-			};
 		};
 	};
 };

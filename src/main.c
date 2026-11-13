@@ -1,12 +1,14 @@
 /*
  * Reusable e-paper conference badge (Zephyr).
  *
- * Shows one of several pre-rendered 296x128 pages (see tools/make_badge.py).
+ * Shows one of several pre-rendered pages (800x480 for the 4.26" panel) (see tools/make_badge.py).
  *   KEY1 = previous page, KEY2 = next page, KEY3 = redraw current page
  *   (a full refresh clears any ghosting).
  *
  * The panel keeps its image with no power, so nothing runs between key presses.
  */
+
+#include <string.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -128,14 +130,14 @@ static int check_display(void)
 		caps.y_resolution, caps.screen_info, caps.current_pixel_format);
 
 	/*
-	 * make_badge.py packs pixels as 1 = white, vertical 8-pixel tiles, MSB at the
-	 * top. Refuse to draw if the driver would interpret the buffer differently.
+	 * make_badge.py packs pixels row by row, MSB = leftmost pixel, 1 = white (MONO01).
+	 * Refuse to draw if the driver would interpret the layout differently.
 	 */
 	if (caps.x_resolution != BADGE_WIDTH || caps.y_resolution != BADGE_HEIGHT ||
-	    !(caps.screen_info & SCREEN_INFO_MONO_VTILED) ||
+	    (caps.screen_info & SCREEN_INFO_MONO_VTILED) ||
 	    !(caps.screen_info & SCREEN_INFO_MONO_MSB_FIRST) ||
 	    caps.current_pixel_format != PIXEL_FORMAT_MONO01) {
-		LOG_ERR("display layout does not match badge images (%dx%d, MONO01, VTILED, MSB)",
+		LOG_ERR("display layout does not match badge images (%dx%d, MONO01, rows, MSB)",
 			BADGE_WIDTH, BADGE_HEIGHT);
 		return -EINVAL;
 	}
@@ -143,9 +145,73 @@ static int check_display(void)
 	return 0;
 }
 
+#if CONFIG_BADGE_TEST_PATTERN
+#define NUM_PAGES 4U
+
+static uint8_t pattern_buf[BADGE_BUF_SIZE];
+
+/* Same layout as the badge bitmaps: rows of BADGE_WIDTH/8 bytes, MSB = leftmost pixel, 1 = white. */
+static void pattern_pixel(int x, int y, bool black)
+{
+	if (x < 0 || y < 0 || x >= BADGE_WIDTH || y >= BADGE_HEIGHT) {
+		return;
+	}
+
+	uint8_t *b = &pattern_buf[y * (BADGE_WIDTH / 8) + x / 8];
+	uint8_t mask = (uint8_t)(0x80 >> (x % 8));
+
+	if (black) {
+		*b &= (uint8_t)~mask;
+	} else {
+		*b |= mask;
+	}
+}
+
+static const char *make_pattern(size_t idx)
+{
+	memset(pattern_buf, idx == 1 ? 0x00 : 0xFF, sizeof(pattern_buf));
+
+	if (idx == 2) {
+		/* 6 px border, a 40x40 black square in the top-left corner (x=0,y=0),
+		 * a 40x16 one at the top-right, and a diagonal: shows orientation and edges. */
+		for (int y = 0; y < BADGE_HEIGHT; y++) {
+			for (int x = 0; x < BADGE_WIDTH; x++) {
+				bool border = x < 6 || y < 6 || x >= BADGE_WIDTH - 6 ||
+					      y >= BADGE_HEIGHT - 6;
+				bool corner = x < 120 && y < 120;
+				bool corner2 = x >= BADGE_WIDTH - 120 && y < 48;
+				bool diag = (x * BADGE_HEIGHT / BADGE_WIDTH) == y;
+
+				pattern_pixel(x, y, border || corner || corner2 || diag);
+			}
+		}
+		return "orientation marker";
+	}
+
+	if (idx == 3) {
+		for (int y = 0; y < BADGE_HEIGHT; y++) {
+			for (int x = 0; x < BADGE_WIDTH; x++) {
+				pattern_pixel(x, y, (x / 16) % 2 == 0);
+			}
+		}
+		return "vertical stripes 16 px";
+	}
+
+	return idx == 0 ? "all white" : "all black";
+}
+#else
+#define NUM_PAGES ((size_t)BADGE_PAGE_COUNT)
+#endif
+
 static int show_page(size_t index)
 {
-	const struct badge_page *page = &badge_pages[index];
+#if CONFIG_BADGE_TEST_PATTERN
+	const char *page_name = make_pattern(index);
+	const uint8_t *page_data = pattern_buf;
+#else
+	const char *page_name = badge_pages[index].name;
+	const uint8_t *page_data = badge_pages[index].data;
+#endif
 	const struct display_buffer_descriptor desc = {
 		.buf_size = BADGE_BUF_SIZE,
 		.width = BADGE_WIDTH,
@@ -154,15 +220,15 @@ static int show_page(size_t index)
 	};
 	int err;
 
-	LOG_INF("showing page %zu/%zu: %s", index + 1, (size_t)BADGE_PAGE_COUNT, page->name);
+	LOG_INF("showing page %zu/%zu: %s", index + 1, (size_t)NUM_PAGES, page_name);
 
 	/*
-	 * Blanking on: the driver only loads the frame into the controller RAM.
-	 * Blanking off: it triggers one full refresh and waits for BUSY to clear.
+	 * Blanking on: nothing to do. display_write() loads the frame into the controller RAM,
+	 * display_blanking_off() runs one full refresh and waits for BUSY to clear.
 	 */
 	(void)display_blanking_on(epd);
 
-	err = display_write(epd, 0, 0, &desc, page->data);
+	err = display_write(epd, 0, 0, &desc, page_data);
 	if (err) {
 		LOG_ERR("display_write failed (%d)", err);
 	}
@@ -200,7 +266,7 @@ int main(void)
 		k_msgq_get(&key_events, &action, K_FOREVER);
 
 		if (action != 0) {
-			page = (size_t)(((int)page + BADGE_PAGE_COUNT + action) % BADGE_PAGE_COUNT);
+			page = (size_t)(((int)page + (int)NUM_PAGES + action) % (int)NUM_PAGES);
 		}
 
 		(void)show_page(page);

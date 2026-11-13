@@ -1,6 +1,6 @@
 /*
  * Simulator: Zephyr's native_sim with its SDL window standing in for the e-paper panel.
- * Same 296x128 monochrome layout as the real SSD1680 (see native_sim.conf).
+ * Same 800x480 monochrome row-major layout as the real SSD1677 (see native_sim_native_64.conf).
  * The gpio-keys sit on gpio_emul; nothing presses them, pages advance via
  * CONFIG_BADGE_AUTO_CYCLE_MS instead.
  */
@@ -33,6 +33,6 @@
 };
 
 &sdl_dc {
-	width = <296>;
-	height = <128>;
+	width = <800>;
+	height = <480>;
 };

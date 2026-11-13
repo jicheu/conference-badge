@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """Render conference-badge pages and emit a C header for the Zephyr firmware.
 
-Each page is drawn at the panel's native size (296x128 for the 2.9" SSD1680) and
-packed the way Zephyr's ssd16xx driver expects it:
+Each page is drawn at the panel's native size (800x480 for the Seeed 4.26" SSD1677 panel)
+and packed the way the firmware's ssd1677 driver expects it:
 
     pixel format  MONO01      (bit 1 = white, bit 0 = black)
-    tiling        vertical    (one byte = 8 pixels of one column)
-    bit order     MSB first   (bit 7 = topmost pixel of the tile)
-    index         (y // 8) * width + x
+    layout        row by row  (width / 8 bytes per row)
+    bit order     MSB first   (bit 7 = leftmost pixel of the byte)
+    index         y * (width / 8) + x / 8
 
 Usage:
     python3 tools/make_badge.py badges.json -o src/badge_images.h --preview preview
 
     -o FILE       C header to write (default src/badge_images.h); the firmware includes it
-    --preview DIR also write one PNG per page (page0.png, page1.png, ...), enlarged 3x,
+    --preview DIR also write one PNG per page (page0.png, page1.png, ...), at the panel's native size (800x480),
                   so you can check the layout and scan the QR code without a board
     --font FILE   use this TrueType font for all text
 
 Input JSON (see badges.example.json):
 
     {
-      "width": 296, "height": 128,          // optional; panel size, height must be a multiple of 8
+      "width": 800, "height": 480,          // optional; panel size, width must be a multiple of 8
       "pages": [ ... ]                      // shown in this order; KEY1/KEY2 move through them
     }
 
@@ -68,7 +68,18 @@ from pathlib import Path
 import segno
 from PIL import Image, ImageDraw, ImageFont
 
-MARGIN = 6
+SCALE = 1.0  # layout was designed on 296x128; set from the panel height in main()
+
+
+def sc(n):
+    """Scale a design size (pixels or font size) to the panel."""
+    return max(1, round(n * SCALE))
+
+
+PREVIEW_ZOOM = 1  # the 800x480 PNG is already big
+
+
+MARGIN = 6  # scaled in main()
 QUIET_MODULES = 2  # QR quiet zone; the spec says 4, but 2 scans fine on e-paper
 MIN_QR_SCALE = 2  # below this a QR is unreliable; below 3 we warn
 
@@ -152,13 +163,17 @@ def layout(draw, text, bold, max_width, max_lines, sizes, font_path):
         if len(lines) <= max_lines:
             return font, lines
     font = load_font(sizes[-1], bold, font_path)
-    lines = wrap(draw, text, font, max_width)[:max_lines]
+    all_lines = wrap(draw, text, font, max_width)
+    lines = all_lines[:max_lines]
     if lines:
-        lines[-1] = ellipsize(draw, lines[-1], font, max_width)
+        # Text was cut: join what was dropped so the last line ends with "..."
+        tail = " ".join(all_lines[max_lines - 1:])
+        lines[-1] = ellipsize(draw, tail + ("" if len(all_lines) <= max_lines else " ..."), font, max_width)
     return font, lines
 
 
-def draw_lines(draw, x, y, lines, font, gap=1):
+def draw_lines(draw, x, y, lines, font, gap=None):
+    gap = sc(1) if gap is None else gap
     lh = line_height(font)
     for line in lines:
         draw.text((x, y), line, font=font, fill=0)
@@ -166,7 +181,8 @@ def draw_lines(draw, x, y, lines, font, gap=1):
     return y
 
 
-def block_height(lines, font, gap=1):
+def block_height(lines, font, gap=None):
+    gap = sc(1) if gap is None else gap
     return len(lines) * (line_height(font) + gap) - (gap if lines else 0)
 
 
@@ -329,30 +345,30 @@ def new_canvas(width, height):
 
 def render_card(page, width, height, font_path):
     img, draw = new_canvas(width, height)
-    qr_x, _ = draw_qr(draw, page, height - 2 * MARGIN, width - MARGIN, "right")
+    qr_x, _ = draw_qr(draw, page, min(height - 2 * MARGIN, int(height * 0.70)), width - MARGIN, "right")
 
-    x0 = MARGIN + 2
+    x0 = MARGIN + sc(2)
     max_w = qr_x - x0 - MARGIN
     avail = height - 2 * MARGIN
     title_text = page.get("title", "")
     company_text = page.get("company", "")
 
     # Shrink the name until the whole stack fits.
-    for name_max in range(30, 13, -1):
+    for name_max in range(sc(30), sc(13), -1):
         name_font, name_lines = layout(
-            draw, page["name"], True, max_w, 2, list(range(name_max, 13, -1)), font_path
+            draw, page["name"], True, max_w, 2, list(range(name_max, sc(13), -1)), font_path
         )
         title_font, title_lines = layout(
-            draw, title_text, False, max_w, 2, [13, 12, 11, 10, 9], font_path
+            draw, title_text, False, max_w, 3, [sc(13), sc(12), sc(11), sc(10), sc(9), sc(8)], font_path
         ) if title_text else (None, [])
         comp_font, comp_lines = layout(
-            draw, company_text, True, max_w, 1, [14, 13, 12, 11, 10], font_path
+            draw, company_text, True, max_w, 1, [sc(14), sc(13), sc(12), sc(11), sc(10), sc(9), sc(8)], font_path
         ) if company_text else (None, [])
         total = block_height(name_lines, name_font)
         if title_lines:
-            total += 10 + block_height(title_lines, title_font)
+            total += sc(10) + block_height(title_lines, title_font)
         if comp_lines:
-            total += 8 + block_height(comp_lines, comp_font)
+            total += sc(8) + block_height(comp_lines, comp_font)
         if total <= avail:
             break
     else:
@@ -361,30 +377,30 @@ def render_card(page, width, height, font_path):
     y = MARGIN + (avail - total) // 2
     y = draw_lines(draw, x0, y, name_lines, name_font)
     if title_lines:
-        y += 4
-        draw.line([x0, y, x0 + min(max_w, 60), y], fill=0, width=2)
-        y += 6
+        y += sc(4)
+        draw.line([x0, y, x0 + min(max_w, sc(60)), y], fill=0, width=sc(2))
+        y += sc(6)
         y = draw_lines(draw, x0, y, title_lines, title_font)
     if comp_lines:
-        y += 8
+        y += sc(8)
         draw_lines(draw, x0, y, comp_lines, comp_font)
     return img
 
 
 def render_qr_page(page, width, height, font_path):
     img, draw = new_canvas(width, height)
-    qr_x, qr_size = draw_qr(draw, page, height - 2 * MARGIN, MARGIN, "left")
-    x0 = qr_x + qr_size + 12
+    qr_x, qr_size = draw_qr(draw, page, int(height * 0.80), MARGIN, "left")
+    x0 = qr_x + qr_size + sc(12)
     max_w = width - x0 - MARGIN
     caption = page.get("caption", "Scan to connect")
-    cap_font, cap_lines = layout(draw, caption, True, max_w, 3, [26, 24, 22, 20, 18, 16, 14], font_path)
+    cap_font, cap_lines = layout(draw, caption, True, max_w, 3, [sc(26), sc(24), sc(22), sc(20), sc(18), sc(16), sc(14)], font_path)
     foot = page.get("footer", "")
-    foot_font, foot_lines = layout(draw, foot, False, max_w, 2, [12, 11, 10, 9], font_path) if foot else (None, [])
-    total = block_height(cap_lines, cap_font) + (8 + block_height(foot_lines, foot_font) if foot_lines else 0)
+    foot_font, foot_lines = layout(draw, foot, False, max_w, 2, [sc(12), sc(11), sc(10), sc(9), sc(8), sc(7)], font_path) if foot else (None, [])
+    total = block_height(cap_lines, cap_font) + (sc(8) + block_height(foot_lines, foot_font) if foot_lines else 0)
     y = (height - total) // 2
     y = draw_lines(draw, x0, y, cap_lines, cap_font)
     if foot_lines:
-        draw_lines(draw, x0, y + 8, foot_lines, foot_font)
+        draw_lines(draw, x0, y + sc(8), foot_lines, foot_font)
     return img
 
 
@@ -400,18 +416,15 @@ def to_mono(img, threshold=160):
 
 
 def pack(img):
-    """Pack an 'L' image (0 = black, 255 = white) for Zephyr's ssd16xx driver."""
+    """Pack an 'L' image (0 = black, 255 = white): rows of width/8 bytes, MSB = leftmost, 1 = white."""
     width, height = img.size
-    assert height % 8 == 0, "panel height must be a multiple of 8"
+    assert width % 8 == 0, "panel width must be a multiple of 8"
     px = img.load()
-    out = bytearray(width * height // 8)
-    for tile in range(height // 8):
+    out = bytearray(width // 8 * height)
+    for y in range(height):
         for x in range(width):
-            byte = 0
-            for bit in range(8):
-                if px[x, tile * 8 + bit]:
-                    byte |= 0x80 >> bit
-            out[tile * width + x] = byte
+            if px[x, y]:
+                out[y * (width // 8) + x // 8] |= 0x80 >> (x % 8)
     return bytes(out)
 
 
@@ -421,8 +434,7 @@ def unpack(data, width, height):
     px = img.load()
     for y in range(height):
         for x in range(width):
-            byte = data[(y // 8) * width + x]
-            px[x, y] = 255 if byte & (0x80 >> (y % 8)) else 0
+            px[x, y] = 255 if data[y * (width // 8) + x // 8] & (0x80 >> (x % 8)) else 0
     return img
 
 
@@ -456,16 +468,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("config", help="JSON file describing the pages")
     ap.add_argument("-o", "--out", default="src/badge_images.h", help="C header to write")
-    ap.add_argument("--preview", metavar="DIR", help="also write PNG previews (3x, nearest neighbour)")
+    ap.add_argument("--preview", metavar="DIR", help="also write PNG previews (native size)")
     ap.add_argument("--font", help="TrueType font to use for all text (default: DejaVu/Liberation/Arial)")
     args = ap.parse_args()
 
     global BASE_DIR
     BASE_DIR = Path(args.config).resolve().parent
     cfg = json.loads(Path(args.config).read_text())
-    width, height = cfg.get("width", 296), cfg.get("height", 128)
-    if height % 8:
-        raise SystemExit("height must be a multiple of 8")
+    width, height = cfg.get("width", 800), cfg.get("height", 480)
+    if width % 8:
+        raise SystemExit("width must be a multiple of 8")
+    global SCALE, MARGIN
+    SCALE = height / 128
+    MARGIN = sc(6)
 
     rendered = []
     for i, page in enumerate(cfg["pages"]):
@@ -482,7 +497,7 @@ def main():
             out_dir = Path(args.preview)
             out_dir.mkdir(parents=True, exist_ok=True)
             img.convert("1", dither=Image.Dither.NONE).resize(
-                (width * 3, height * 3), Image.Resampling.NEAREST
+                (width * PREVIEW_ZOOM, height * PREVIEW_ZOOM), Image.Resampling.NEAREST
             ).save(out_dir / f"page{i}.png")
 
     write_header(args.out, rendered, width, height)

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Solomon Systech SSD1677 e-paper controller, as used on the Seeed 4.26"
+  800x480 monochrome panel. Out-of-tree driver: src/ssd1677.c.
+
+compatible: "seeed,ssd1677"
+
+include: [mipi-dbi-spi-device.yaml, display-controller.yaml]
+
+properties:
+  busy-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      BUSY pin, high while the controller is working. Declare it
+      GPIO_ACTIVE_HIGH.
+
+  mirror-x:
+    type: boolean
+    description: |
+      Mirror the image horizontally while loading the RAM. The Seeed 4.26"
+      glass is wired mirrored (Seeed_GFX2 sets mirror = true for it): set this
+      for that panel. If the badge shows mirrored text, toggle it.

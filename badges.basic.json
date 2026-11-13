@@ -1,0 +1,19 @@
+{
+  "pages": [
+    {
+      "type": "card",
+      "label": "Name card",
+      "name": "Your Name",
+      "title": "Your Title",
+      "company": "Your Company",
+      "qr": "https://example.com"
+    },
+    {
+      "type": "qr",
+      "label": "Big QR",
+      "qr": "https://example.com",
+      "caption": "Scan to connect",
+      "footer": "example.com"
+    }
+  ]
+}
