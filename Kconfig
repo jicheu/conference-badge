@@ -13,7 +13,7 @@ config BADGE_TEST_PATTERN
 	  Use KEY1/KEY2 to step through them.
 
 config BADGE_PANEL_VTILED
-	bool "Panel driver wants vertical 8-pixel tiles, MONO10 (Zephyr ssd16xx, 2.13\" panel)"
+	bool "Panel driver wants vertical 8-pixel tiles (Zephyr ssd16xx, 2.13\" panel)"
 	help
 	  Off for the 4.26" SSD1677 panel and the simulator (row-by-row, MONO01).
 

@@ -76,8 +76,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import segno
-from PIL import Image, ImageDraw, ImageFont
+try:
+    import segno
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError as e:  # the usual cause: running with the system python (for example under sudo)
+    raise SystemExit(
+        f"{e}\nMissing Python package. Install with: pip install pillow segno pyserial\n"
+        "In a virtual environment? 'sudo python3' does not use it: run\n"
+        f"  sudo {Path(sys.prefix) / 'bin' / 'python'} {sys.argv[0]} ...   (or fix the port permissions, see HOWTO)"
+    )
 
 SCALE = 1.0  # layout was designed on 296x128; set from the panel height in main()
 

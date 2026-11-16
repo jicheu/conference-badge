@@ -1,20 +1,30 @@
 {
   "width": 250,
-  "height": 120,
-  "nfc_url": "https://example.com/alex",
+  "height": 120, 
+  "nfc_url": "https://directory.canonical.com/people/jcverdie",
   "pages": [
     {
       "type": "card",
-      "name": "Your Name",
-      "title": "Your Title",
-      "company": "Your Company",
-      "qr": "https://example.com"
+      "label": "Main card",
+      "name": "JC Verdié",
+      "title": "Field Engineering Director, Devices",
+      "company": "Running Zephyr 26.04 LTS!",
+      "qr_image": "https://www.freepnglogos.com/uploads/qr-code-png/qr-code-file-bangla-mobile-code-0.png"
+    },
+    {
+      "type": "card",
+      "label": "Speaker card",
+      "name": "Marko Puric",
+      "title": "Devices Field Engineer II",
+      "company": "Canonical",
+      "qr": "https://example.com/talk"
     },
     {
       "type": "qr",
-      "qr": "https://example.com",
+      "label": "Big QR",
+      "qr": "https://example.com/alex",
       "caption": "Scan to connect",
-      "footer": "example.com"
+      "footer": "example.com/alex"
     }
   ]
 }

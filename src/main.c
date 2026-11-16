@@ -34,9 +34,11 @@ static const struct device *const epd = DEVICE_DT_GET(DT_CHOSEN(zephyr_display))
 
 #if CONFIG_BADGE_PANEL_VTILED
 /*
- * Panels driven by Zephyr's ssd16xx driver (2.13") want MONO10 (1 = black) in vertical
- * 8-pixel tiles. The badge bitmaps are row by row with 1 = white, so each frame is
- * converted just before it is sent.
+ * Panels driven by Zephyr's ssd16xx driver (2.13") want vertical 8-pixel tiles, MSB first.
+ * The driver calls its format MONO10, but it copies the buffer unchanged into the
+ * controller RAM, where 1 = white (its own clear routine writes 0xff for white). So the
+ * polarity is the same as the badge bitmaps (1 = white); only the layout changes: each
+ * frame is converted from rows to tiles just before it is sent.
  */
 static uint8_t frame_buf[BADGE_WIDTH * BADGE_HEIGHT / 8];
 
@@ -50,7 +52,7 @@ static void convert_frame(const uint8_t *src)
 		for (size_t x = 0; x < BADGE_WIDTH; x++) {
 			bool white = src[y * row_bytes + x / 8] & (0x80 >> (x % 8));
 
-			if (!white) {
+			if (white) {
 				frame_buf[(y / 8) * BADGE_WIDTH + x] |= (uint8_t)(0x80 >> (y % 8));
 			}
 		}
@@ -168,7 +170,7 @@ static int check_display(void)
 		caps.y_resolution, caps.screen_info, caps.current_pixel_format);
 
 #if CONFIG_BADGE_PANEL_VTILED
-	/* ssd16xx: MONO10, vertical tiles, MSB first. */
+	/* ssd16xx: reported as MONO10, vertical tiles, MSB first (data is 1 = white, see above). */
 	bool layout_ok = (caps.screen_info & SCREEN_INFO_MONO_VTILED) &&
 			 caps.current_pixel_format == PIXEL_FORMAT_MONO10;
 #else
